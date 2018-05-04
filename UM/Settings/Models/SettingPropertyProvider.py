@@ -1,13 +1,20 @@
-# Copyright (c) 2016 Ultimaker B.V.
-# Uranium is released under the terms of the AGPLv3 or higher.
+# Copyright (c) 2017 Ultimaker B.V.
+# Uranium is released under the terms of the LGPLv3 or higher.
 
-from PyQt5.QtCore import QObject, QVariant, pyqtProperty, pyqtSlot, pyqtSignal
+from PyQt5.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
 from PyQt5.QtQml import QQmlPropertyMap
+from UM.FlameProfiler import pyqtSlot
 
 from UM.Logger import Logger
+from UM.Application import Application
 from UM.Settings.SettingFunction import SettingFunction
-
-import UM.Settings
+from UM.Settings.ContainerRegistry import ContainerRegistry
+from UM.Settings.DefinitionContainer import DefinitionContainer
+from UM.Settings.InstanceContainer import InstanceContainer
+from UM.Settings.Interfaces import PropertyEvaluationContext
+from UM.Settings.SettingInstance import InstanceState
+from UM.Settings.SettingRelation import RelationType
+from UM.Settings.SettingDefinition import SettingDefinition
 
 ##  This class provides the value and change notifications for the properties of a single setting
 #
@@ -20,7 +27,7 @@ class SettingPropertyProvider(QObject):
     def __init__(self, parent = None, *args, **kwargs):
         super().__init__(parent = parent, *args, **kwargs)
 
-        self._property_map = None
+        self._property_map = QQmlPropertyMap(self)
 
         self._stack_id = ""
         self._stack = None
@@ -33,6 +40,13 @@ class SettingPropertyProvider(QObject):
         self._remove_unused_value = True
         self._validator = None
 
+        self._update_timer = QTimer()
+        self._update_timer.setInterval(100)
+        self._update_timer.setSingleShot(True)
+        self._update_timer.timeout.connect(self._update)
+
+        self.storeIndexChanged.connect(self._storeIndexChanged)
+
     ##  Set the containerStackId property.
     def setContainerStackId(self, stack_id):
         if stack_id == self._stack_id:
@@ -42,21 +56,22 @@ class SettingPropertyProvider(QObject):
 
         if self._stack:
             self._stack.propertiesChanged.disconnect(self._onPropertiesChanged)
-            self._stack.containersChanged.disconnect(self._update)
+            self._stack.containersChanged.disconnect(self._containersChanged)
 
         if self._stack_id:
             if self._stack_id == "global":
-                self._stack = UM.Application.getInstance().getGlobalContainerStack()
+                self._stack = Application.getInstance().getGlobalContainerStack()
             else:
-                stacks = UM.Settings.ContainerRegistry.getInstance().findContainerStacks(id = self._stack_id)
+                stacks = ContainerRegistry.getInstance().findContainerStacks(id = self._stack_id)
                 if stacks:
                     self._stack = stacks[0]
 
             if self._stack:
                 self._stack.propertiesChanged.connect(self._onPropertiesChanged)
-                self._stack.containersChanged.connect(self._update)
+                self._stack.containersChanged.connect(self._containersChanged)
         else:
             self._stack = None
+
         self._validator = None
         self._update()
         self.containerStackIdChanged.emit()
@@ -71,8 +86,9 @@ class SettingPropertyProvider(QObject):
     removeUnusedValueChanged = pyqtSignal()
 
     def setRemoveUnusedValue(self, remove_unused_value):
-        self._remove_unused_value = remove_unused_value
-        self.removeUnusedValueChanged.emit()
+        if self._remove_unused_value != remove_unused_value:
+            self._remove_unused_value = remove_unused_value
+            self.removeUnusedValueChanged.emit()
 
     @pyqtProperty(bool, fset = setRemoveUnusedValue, notify = removeUnusedValueChanged)
     def removeUnusedValue(self):
@@ -114,8 +130,7 @@ class SettingPropertyProvider(QObject):
 
     @pyqtSlot()
     def forcePropertiesChanged(self):
-        for watched_property in self._watched_properties:
-            self._onPropertyChanged(self._key, watched_property)
+        self._onPropertiesChanged(self._key, self._watched_properties)
 
     def setStoreIndex(self, index):
         if index != self._store_index:
@@ -133,7 +148,7 @@ class SettingPropertyProvider(QObject):
     @pyqtProperty("QVariantList", notify = stackLevelChanged)
     def stackLevels(self):
         if not self._stack:
-            return -1
+            return [-1]
         return self._stack_levels
 
     ##  Set the value of a property.
@@ -151,7 +166,7 @@ class SettingPropertyProvider(QObject):
             return
 
         container = self._stack.getContainer(self._store_index)
-        if isinstance(container, UM.Settings.DefinitionContainer):
+        if isinstance(container, DefinitionContainer):
             return
 
         # In some cases we clean some stuff and the result is as when nothing as been changed manually.
@@ -161,6 +176,12 @@ class SettingPropertyProvider(QObject):
                     old_value = self.getPropertyValue(property_name, index)
 
                     key_state = str(self._stack.getContainer(self._store_index).getProperty(self._key, "state"))
+
+                    # The old_value might be a SettingFunction, like round(), sum(), etc.
+                    #  In this case retrieve the value to compare
+                    if isinstance(old_value, SettingFunction):
+                        old_value = old_value(self._stack)
+
                     # sometimes: old value is int, property_value is float
                     # (and the container is not removed, so the revert button appears)
                     if str(old_value) == str(property_value) and key_state != "InstanceState.Calculated":
@@ -219,11 +240,11 @@ class SettingPropertyProvider(QObject):
                 break  # Found the right stack
 
         if not current_stack:
-            Logger.log("w", "Unable to remove instance from container because the right stack at stack level %d could not be found", stack_level)
+            Logger.log("w", "Unable to remove instance from container because the right stack at stack level %d could not be found", index)
             return
 
         container = current_stack.getContainer(index)
-        if not container or not isinstance(container, UM.Settings.InstanceContainer):
+        if not container or not isinstance(container, InstanceContainer):
             Logger.log("w", "Unable to remove instance from container as it was either not found or not an instance container")
             return
 
@@ -249,7 +270,7 @@ class SettingPropertyProvider(QObject):
 
             relation_count += 1
 
-            if self._stack.getProperty(key, "state") != UM.Settings.InstanceState.User:
+            if self._stack.getProperty(key, "state") != InstanceState.User:
                 value_used_count += 1
 
             # If the setting has a formula the value is still used.
@@ -268,13 +289,17 @@ class SettingPropertyProvider(QObject):
                 self.isValueUsedChanged.emit()
             return
 
+        has_values_changed = False
         for property_name in property_names:
             if property_name not in self._watched_properties:
                 continue
 
+            has_values_changed = True
             self._property_map.insert(property_name, self._getPropertyValue(property_name))
 
         self._updateStackLevels()
+        if has_values_changed:
+            self.propertiesChanged.emit()
 
     def _update(self, container = None):
         if not self._stack or not self._watched_properties or not self._key:
@@ -283,20 +308,27 @@ class SettingPropertyProvider(QObject):
         self._updateStackLevels()
         relations = self._stack.getProperty(self._key, "relations")
         if relations:  # If the setting doesn't have the property relations, None is returned
-            for relation in filter(lambda r: r.type == UM.Settings.SettingRelation.RelationType.RequiredByTarget and r.role == "value", relations):
+            for relation in filter(lambda r: r.type == RelationType.RequiredByTarget and r.role == "value", relations):
                 self._relations.add(relation.target.key)
-
-        self._property_map = QQmlPropertyMap(self)
 
         for property_name in self._watched_properties:
             self._property_map.insert(property_name, self._getPropertyValue(property_name))
-
-        self.propertiesChanged.emit()
 
         # Force update of value_used
         self._value_used = None
         self.isValueUsedChanged.emit()
 
+    def _updateDelayed(self, container = None):
+        self._update_timer.start()
+
+    def _containersChanged(self, container = None):
+        self._updateDelayed(container = container)
+
+    def _storeIndexChanged(self, container = None):
+        self._updateDelayed(container = container)
+
+    ##  Updates the self._stack_levels field, which indicates at which levels in
+    #   the stack the property is set.
     def _updateStackLevels(self):
         levels = []
         # Start looking at the stack this provider is attached to.
@@ -312,18 +344,26 @@ class SettingPropertyProvider(QObject):
                 index += 1
             # If there is a next stack, check that one as well.
             current_stack = current_stack.getNextStack()
+
         if levels != self._stack_levels:
             self._stack_levels = levels
             self.stackLevelChanged.emit()
 
     def _getPropertyValue(self, property_name):
-        property_value = self._stack.getProperty(self._key, property_name)
-        if isinstance(property_value, UM.Settings.SettingFunction):
+        # Use the evaluation context to skip certain containers
+        context = PropertyEvaluationContext(self._stack)
+        context.context["evaluate_from_container_index"] = self._store_index
+
+        property_value = self._stack.getProperty(self._key, property_name, context = context)
+        if isinstance(property_value, SettingFunction):
             property_value = property_value(self._stack)
 
         if property_name == "value":
-            property_value = UM.Settings.SettingDefinition.settingValueToString(
-                self._stack.getProperty(self._key, "type"), property_value)
+            setting_type = self._stack.getProperty(self._key, "type")
+            if setting_type is not None:
+                property_value = SettingDefinition.settingValueToString(setting_type, property_value)
+            else:
+                property_value = ""
         elif property_name == "validationState":
             # Setting is not validated. This can happen if there is only a setting definition.
             # We do need to validate it, because a setting defintions value can be set by a function, which could
@@ -331,9 +371,10 @@ class SettingPropertyProvider(QObject):
             if property_value is None:
                 if not self._validator:
                     definition = self._stack.getSettingDefinition(self._key)
-                    validator_type = UM.Settings.SettingDefinition.getValidatorForType(definition.type)
-                    if validator_type:
-                        self._validator = validator_type(self._key)
+                    if definition:
+                        validator_type = SettingDefinition.getValidatorForType(definition.type)
+                        if validator_type:
+                            self._validator = validator_type(self._key)
                 if self._validator:
                     property_value = self._validator(self._stack)
         return str(property_value)

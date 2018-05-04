@@ -1,62 +1,87 @@
 # Copyright (c) 2015 Ultimaker B.V.
-# Uranium is released under the terms of the AGPLv3 or higher.
+# Uranium is released under the terms of the LGPLv3 or higher.
 
-from PyQt5.QtCore import Qt, QCoreApplication, pyqtSlot
+import os
+
+from PyQt5.QtCore import Qt
 
 from UM.Application import Application
 from UM.Qt.ListModel import ListModel
 from UM.Logger import Logger
-from UM.PluginRegistry import PluginRegistry
+from UM.Resources import Resources
+
 
 class PluginsModel(ListModel):
-    NameRole = Qt.UserRole + 1
-    RequiredRole = Qt.UserRole + 2
-    EnabledRole = Qt.UserRole + 3
-    TypeRole = Qt.UserRole + 4
-    DescriptionRole = Qt.UserRole + 5
-    AuthorRole = Qt.UserRole + 6
-    VersionRole = Qt.UserRole + 7
-    IdRole = Qt.UserRole + 8
-
-    def __init__(self, parent = None):
+    def __init__(self, parent = None, view = "installed"):
         super().__init__(parent)
-        self._plugin_registery = PluginRegistry.getInstance()
-        self._required_plugins = Application.getInstance().getRequiredPlugins()
-        self.addRoleName(self.NameRole, "name")
-        self.addRoleName(self.RequiredRole, "required")
-        self.addRoleName(self.EnabledRole, "enabled")
 
-        self.addRoleName(self.DescriptionRole, "description")
-        self.addRoleName(self.AuthorRole, "author")
-        self.addRoleName(self.VersionRole, "version")
-        self._update()
+        self._application = Application.getInstance()
+        self._registry = self._application.getPluginRegistry()
+        self._required_plugins = self._application.getRequiredPlugins()
 
-    def _update(self):
-        items = [] 
-        active_plugins = self._plugin_registery.getActivePlugins()
-        for plugin in self._plugin_registery.getAllMetaData():
-            if "plugin" not in plugin:
-                Logger.log("e", "Plugin is missing a plugin metadata entry")
+        # Static props:
+        # These should be defined in plugin.json and are read-only.
+        self.addRoleName(Qt.UserRole + 1, "id")
+        self.addRoleName(Qt.UserRole + 2, "name")
+        self.addRoleName(Qt.UserRole + 3, "version")
+        self.addRoleName(Qt.UserRole + 4, "author")
+        self.addRoleName(Qt.UserRole + 5, "author_email")
+        self.addRoleName(Qt.UserRole + 6, "description")
+
+        # Computed props:
+        # These are computed based on the user's system and interactions.
+        self.addRoleName(Qt.UserRole + 7, "external")
+        self.addRoleName(Qt.UserRole + 8, "file_location")
+        self.addRoleName(Qt.UserRole + 9, "status")
+        self.addRoleName(Qt.UserRole + 10, "enabled")
+        self.addRoleName(Qt.UserRole + 11, "required")
+        self.addRoleName(Qt.UserRole + 12, "can_uninstall")
+        self.addRoleName(Qt.UserRole + 13, "can_upgrade")
+        self.addRoleName(Qt.UserRole + 14, "update_url")
+
+        if view == "installed":
+            self._plugins = self._registry.getInstalledPlugins()
+            self._update(view)
+
+        if view == "available":
+            self._plugins = self._registry.getExternalPlugins()
+            self._update(view)
+
+    def _update(self, view):
+        items = []
+        # Get all active plugins from registry (list of strings):
+        active_plugins = self._registry.getActivePlugins()
+        installed_plugins = self._registry.getInstalledPlugins()
+
+        # Metadata is used as the official list of "all plugins":
+        for plugin_id in self._plugins:
+            metadata = self._registry.getMetaData(plugin_id)
+
+            if "plugin" not in metadata:
+                Logger.log("e", "%s is missing a plugin metadata entry", plugin_id)
                 continue
 
-            aboutData = plugin["plugin"]
-            items.append({
-                "id": plugin["id"],
-                "required": plugin["id"] in self._required_plugins,
-                "enabled": plugin["id"] in active_plugins,
+            props = metadata["plugin"]
 
-                "name": aboutData.get("name", plugin["id"]),
-                "description": aboutData.get("description", ""),
-                "author": aboutData.get("author", "John Doe"),
-                "version": aboutData.get("version", "Unknown")
+            items.append({
+                # Static props from above are taken from the plugin's metadata:
+                "id": metadata["id"],
+                "name": props.get("name", props.get("label", metadata["id"])),
+                "version": props.get("version", "Unknown"),
+                "author": props.get("author", "Anonymous"),
+                "author_email": props.get("author_email", "plugins@ultimaker.com"),
+                "description": props.get("description", props.get("short_description", "No description provided...")),
+
+                # Computed props from above are computed
+                "external": True if metadata["id"] in self._registry._plugins_external else False,
+                "file_location": props.get("file_location", "/"),
+                "status": "installed" if metadata["id"] in installed_plugins else "available",
+                "enabled": True if view == "available" else metadata["id"] in active_plugins,
+                "required": metadata["id"] in self._required_plugins,
+                "can_uninstall": self._registry.isBundledPlugin(plugin_id),
+                "can_upgrade": False, # Default, potentially overwritten by plugin browser
+                "update_url": None # Default, potentially overwritten by plugin browser
             })
+
         items.sort(key = lambda k: k["name"])
         self.setItems(items)
-
-    @pyqtSlot(str,bool)
-    def setEnabled(self, name, enabled):
-        if enabled:
-            self._plugin_registery.addActivePlugin(name)
-        else:
-            self._plugin_registery.removeActivePlugin(name)
-        self._update()

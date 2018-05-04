@@ -1,5 +1,5 @@
-# Copyright (c) 2015 Ultimaker B.V.
-# Uranium is released under the terms of the AGPLv3 or higher.
+# Copyright (c) 2017 Ultimaker B.V.
+# Uranium is released under the terms of the LGPLv3 or higher.
 
 import threading
 import argparse
@@ -12,13 +12,23 @@ from UM.Mesh.MeshFileHandler import MeshFileHandler
 from UM.Resources import Resources
 from UM.Operations.OperationStack import OperationStack
 from UM.Event import CallFunctionEvent
-from UM.Signal import Signal, signalemitter
+from UM.Settings.ContainerRegistry import ContainerRegistry
+import UM.Settings.ContainerStack
+import UM.Settings.InstanceContainer
+from UM.Signal import Signal, signalemitter, SignalQueue
 from UM.Logger import Logger
 from UM.Preferences import Preferences
 from UM.OutputDevice.OutputDeviceManager import OutputDeviceManager
 from UM.i18n import i18nCatalog
+from UM.Workspace.WorkspaceFileHandler import WorkspaceFileHandler
 
 import UM.Settings
+
+from typing import TYPE_CHECKING, List, Callable, Any, Optional
+if TYPE_CHECKING:
+    from UM.Settings.ContainerStack import ContainerStack
+    from UM.Backend import Backend
+    from UM.Extension import Extension
 
 ##  Central object responsible for running the main event loop and creating other central objects.
 #
@@ -26,13 +36,13 @@ import UM.Settings
 #   responsible for starting the main event loop. It is passed on to plugins so it can be easily
 #   used to access objects required for those plugins.
 @signalemitter
-class Application():
+class Application:
     ##  Init method
     #
     #   \param name \type{string} The name of the application.
     #   \param version \type{string} Version, formatted as major.minor.rev
-    def __init__(self, name, version, buildtype = "", **kwargs):
-        if Application._instance != None:
+    def __init__(self, name: str, version: str, build_type: str = "", is_debug_mode = False, parser = None, parsed_command_line = {}, **kwargs):
+        if Application._instance is not None:
             raise ValueError("Duplicate singleton creation")
 
         # If the constructor is called and there is no instance, set the instance to self.
@@ -41,24 +51,30 @@ class Application():
 
         self._application_name = name
         self._version = version
-        self._buildtype = buildtype
+        self._build_type = build_type
+        if "debug" in parsed_command_line.keys():
+            if not parsed_command_line["debug"] and is_debug_mode:
+                parsed_command_line["debug"] = is_debug_mode
 
         os.putenv("UBUNTU_MENUPROXY", "0")  # For Ubuntu Unity this makes Qt use its own menu bar rather than pass it on to Unity.
 
         Signal._app = self
+        Signal._signalQueue = self
         Resources.ApplicationIdentifier = name
-        i18nCatalog.setApplication(self)
+        Resources.ApplicationVersion = version
 
         Resources.addSearchPath(os.path.join(os.path.dirname(sys.executable), "resources"))
         Resources.addSearchPath(os.path.join(Application.getInstallPrefix(), "share", "uranium", "resources"))
         Resources.addSearchPath(os.path.join(Application.getInstallPrefix(), "Resources", "uranium", "resources"))
         Resources.addSearchPath(os.path.join(Application.getInstallPrefix(), "Resources", self.getApplicationName(), "resources"))
+
         if not hasattr(sys, "frozen"):
             Resources.addSearchPath(os.path.join(os.path.abspath(os.path.dirname(__file__)), "..", "resources"))
 
         self._main_thread = threading.current_thread()
 
         super().__init__()  # Call super to make multiple inheritance work.
+        i18nCatalog.setApplication(self)
 
         self._renderer = None
 
@@ -66,9 +82,13 @@ class Application():
         PluginRegistry.addType("logger", Logger.addLogger)
         PluginRegistry.addType("extension", self.addExtension)
 
+        self.default_theme = self.getApplicationName()
+
         preferences = Preferences.getInstance()
-        preferences.addPreference("general/language", "en")
+        preferences.addPreference("general/language", "en_US")
         preferences.addPreference("general/visible_settings", "")
+        preferences.addPreference("general/plugins_to_remove", "")
+        preferences.addPreference("general/disabled_plugins", "")
 
         try:
             preferences.readFromFile(Resources.getPath(Resources.Preferences, self._application_name + ".cfg"))
@@ -76,14 +96,17 @@ class Application():
             pass
 
         self._controller = Controller(self)
-        self._mesh_file_handler = MeshFileHandler()
+        self._mesh_file_handler = MeshFileHandler.getInstance()
+        self._mesh_file_handler.setApplication(self)
+        self._workspace_file_handler = WorkspaceFileHandler.getInstance()
+        self._workspace_file_handler.setApplication(self)
         self._extensions = []
         self._backend = None
         self._output_device_manager = OutputDeviceManager()
 
         self._required_plugins = []
 
-        self._operation_stack = OperationStack()
+        self._operation_stack = OperationStack(self.getController())
 
         self._plugin_registry = PluginRegistry.getInstance()
 
@@ -105,9 +128,12 @@ class Application():
 
         self._plugin_registry.setApplication(self)
 
-        UM.Settings.ContainerRegistry.setApplication(self)
+        ContainerRegistry.setApplication(self)
+        UM.Settings.InstanceContainer.setContainerRegistry(self.getContainerRegistry())
+        UM.Settings.ContainerStack.setContainerRegistry(self.getContainerRegistry())
 
-        self._parsed_command_line = None
+        self._command_line_parser = parser
+        self._parsed_command_line = parsed_command_line
         self.parseCommandLine()
 
         self._visible_messages = []
@@ -117,6 +143,8 @@ class Application():
 
         self._global_container_stack = None
 
+    def getContainerRegistry(self):
+        return ContainerRegistry.getInstance()
 
     ##  Emitted when the application window was closed and we need to shut down the application
     applicationShuttingDown = Signal()
@@ -127,11 +155,13 @@ class Application():
 
     globalContainerStackChanged = Signal()
 
-    def setGlobalContainerStack(self, stack):
+    workspaceLoaded = Signal()
+
+    def setGlobalContainerStack(self, stack: "ContainerStack"):
         self._global_container_stack = stack
         self.globalContainerStackChanged.emit()
 
-    def getGlobalContainerStack(self):
+    def getGlobalContainerStack(self) -> Optional["ContainerStack"]:
         return self._global_container_stack
 
     def hideMessage(self, message):
@@ -140,47 +170,41 @@ class Application():
     def showMessage(self, message):
         raise NotImplementedError
 
+    def showToastMessage(self, title: str, message: str):
+        raise NotImplementedError
+
     ##  Get the version of the application
     #   \returns version \type{string}
-    def getVersion(self):
+    def getVersion(self) -> str:
         return self._version
+
+    @classmethod
+    def getStaticVersion(cls):
+        return "unknown"
 
     ##  Get the buildtype of the application
     #   \returns version \type{string}
-    def getBuildType(self):
-        return self._buildtype
+    def getBuildType(self) -> str:
+        return self._build_type
 
-    ##  Add a message to the visible message list so it will be displayed.
-    #   This should only be called by message object itself.
-    #   To show a message, simply create it and call its .show() function.
-    #   \param message \type{Message} message object
-    #   \sa Message::show()
-    #def showMessage(self, message):
-    #    with self._message_lock:
-    #        if message not in self._visible_messages:
-    #            self._visible_messages.append(message)
-    #            self.visibleMessageAdded.emit(message)
+    def getIsDebugMode(self) -> bool:
+        return self.getCommandLineOption("debug")
 
     visibleMessageAdded = Signal()
-
-    ##  Remove a message from the visible message list so it will no longer be displayed.
-    #   This should only be called by message object itself.
-    #   in principle, this should only be called by the message itself (hide)
-    #   \param message \type{Message} message object
-    #   \sa Message::hide()
-    #def hideMessage(self, message):
-    #    with self._message_lock:
-    #        if message in self._visible_messages:
-    #            self._visible_messages.remove(message)
-    #            self.visibleMessageRemoved.emit(message)
 
     ##  Hide message by ID (as provided by built-in id function)
     #   \param message_id \type{long}
     def hideMessageById(self, message_id):
+        # If a user and the application tries to close same message dialog simultaneously, message_id could become an empty
+        # string, and then the application will raise an error when trying to do "int(message_id)".
+        # So we check the message_id here.
+        if not message_id:
+            return
+
         found_message = None
         with self._message_lock:
             for message in self._visible_messages:
-                if id(message) == message_id:
+                if id(message) == int(message_id):
                     found_message = message
         if found_message is not None:
             self.hideMessageSignal.emit(found_message)
@@ -193,12 +217,12 @@ class Application():
         with self._message_lock:
             return self._visible_messages
 
-    ##  Function that needs to be overridden by child classes with a list of plugin it needs.
+    ##  Function that needs to be overridden by child classes with a list of plugins it needs.
     def _loadPlugins(self):
         pass
 
-    def getCommandLineOption(self, name, default = None): #pylint: disable=bad-whitespace
-        if not self._parsed_command_line:
+    def getCommandLineOption(self, name, default = None):
+        if name not in self._parsed_command_line.keys():
             self.parseCommandLine()
             Logger.log("d", "Command line options: %s", str(self._parsed_command_line))
 
@@ -206,14 +230,12 @@ class Application():
 
     ##  Get name of the application.
     #   \returns application_name \type{string}
-    def getApplicationName(self):
+    def getApplicationName(self) -> str:
         return self._application_name
 
-    ##  Set name of the application.
-    #   \param application_name \type{string}
-    def setApplicationName(self, application_name):
-        self._application_name = application_name
-
+    ##  Get the currently used IETF language tag.
+    #   The returned tag is during runtime used to translate strings.
+    #   \returns language_tag  \type{string}
     def getApplicationLanguage(self):
         override_lang = os.getenv("URANIUM_LANGUAGE")
         if override_lang:
@@ -227,7 +249,7 @@ class Application():
         if env_lang:
             return env_lang
 
-        return "en"
+        return "en_US"
 
     ##  Application has a list of plugins that it *must* have. If it does not have these, it cannot function.
     #   These plugins can not be disabled in any way.
@@ -237,39 +259,47 @@ class Application():
 
     ##  Set the plugins that the application *must* have in order to function.
     #   \param plugin_names \type{list} List of strings with the names of the required plugins
-    def setRequiredPlugins(self, plugin_names):
+    def setRequiredPlugins(self, plugin_names: List[str]):
         self._required_plugins = plugin_names
 
     ##  Set the backend of the application (the program that does the heavy lifting).
     #   \param backend \type{Backend}
-    def setBackend(self, backend):
+    def setBackend(self, backend: "Backend"):
         self._backend = backend
 
     ##  Get the backend of the application (the program that does the heavy lifting).
     #   \returns Backend \type{Backend}
-    def getBackend(self):
+    def getBackend(self) -> "Backend":
         return self._backend
 
     ##  Get the PluginRegistry of this application.
     #   \returns PluginRegistry \type{PluginRegistry}
-    def getPluginRegistry(self):
+    def getPluginRegistry(self) -> PluginRegistry:
         return self._plugin_registry
 
     ##  Get the Controller of this application.
     #   \returns Controller \type{Controller}
-    def getController(self):
+    def getController(self) -> Controller:
         return self._controller
 
     ##  Get the MeshFileHandler of this application.
     #   \returns MeshFileHandler \type{MeshFileHandler}
-    def getMeshFileHandler(self):
+    def getMeshFileHandler(self) -> MeshFileHandler:
         return self._mesh_file_handler
 
-    def getOperationStack(self):
+    def getWorkspaceFileHandler(self) -> WorkspaceFileHandler:
+        return self._workspace_file_handler
+
+    def getOperationStack(self) -> OperationStack:
         return self._operation_stack
 
-    def getOutputDeviceManager(self):
+    def getOutputDeviceManager(self) -> OutputDeviceManager:
         return self._output_device_manager
+
+    ##  Includes eg. last checks before entering the main event loop.
+    #   \returns None \type{None}
+    def preRun(self):
+        return None
 
     ##  Run the main event loop.
     #   This method should be re-implemented by subclasses to start the main event loop.
@@ -294,8 +324,8 @@ class Application():
     #   \param function The function to call.
     #   \param args The positional arguments to pass to the function.
     #   \param kwargs The keyword arguments to pass to the function.
-    def callLater(self, function, *args, **kwargs):
-        event = CallFunctionEvent(function, args, kwargs)
+    def callLater(self, func: Callable[[Any], Any], *args, **kwargs):
+        event = CallFunctionEvent(func, args, kwargs)
         self.functionEvent(event)
 
     ##  Get the application"s main thread.
@@ -304,34 +334,56 @@ class Application():
 
     ##  Return the singleton instance of the application object
     @classmethod
-    def getInstance(cls):
+    def getInstance(cls, **kwargs) -> "Application":
         # Note: Explicit use of class name to prevent issues with inheritance.
-        if Application._instance is None:
-            Application._instance = cls()
+        if not Application._instance:
+            Application._instance = cls(**kwargs)
 
         return Application._instance
 
-    def parseCommandLine(self):
-        parser = argparse.ArgumentParser(prog = self.getApplicationName()) #pylint: disable=bad-whitespace
-        parser.add_argument("--version", action="version", version="%(prog)s {0}".format(self.getVersion()))
-        parser.add_argument("--external-backend",
-                            dest="external-backend",
-                            action="store_true", default=False,
-                            help="Use an externally started backend instead of starting it automatically.")
-        self.addCommandLineOptions(parser)
+    def getCommandlineParser(self, with_help = False):
+        if not self._command_line_parser:
+            self._command_line_parser = argparse.ArgumentParser(prog = self.getApplicationName(), add_help = with_help) #pylint: disable=bad-whitespace
+            self.addCommandLineOptions(self._command_line_parser, parsed_command_line = self._parsed_command_line)
+        return self._command_line_parser
 
-        self._parsed_command_line = vars(parser.parse_args())
+    def parseCommandLine(self):
+        parser = self.getCommandlineParser()
+        new_parsed_args = vars(parser.parse_known_args()[0])
+        new_parsed_args.update(self._parsed_command_line)
+        self._parsed_command_line = new_parsed_args
 
     ##  Can be overridden to add additional command line options to the parser.
     #
     #   \param parser \type{argparse.ArgumentParser} The parser that will parse the command line.
-    def addCommandLineOptions(self, parser):
-        pass
+    @classmethod
+    def addCommandLineOptions(cls, parser, parsed_command_line = {}):
 
-    def addExtension(self, extension):
+        parser.add_argument("--version",
+                            action = "version",
+                            version = "%(prog)s {0}".format(cls.getStaticVersion()))
+
+        parser.add_argument("--external-backend",
+                            dest = "external-backend",
+                            action = "store_true",
+                            default = False,
+                            help = "Use an externally started backend instead of starting it automatically. This is a debug feature to make it possible to run the engine with debug options enabled.")
+
+        parser.add_argument('--headless',
+                            action = 'store_true',
+                            default = False,
+                            help = "Hides all GUI elements.")
+
+        if "debug" not in parsed_command_line.keys():
+            parser.add_argument("--debug",
+                                action = "store_true",
+                                default = False,
+                                help = "Turn on the debug mode by setting this option.")
+
+    def addExtension(self, extension: "Extension"):
         self._extensions.append(extension)
 
-    def getExtensions(self):
+    def getExtensions(self) -> List["Extension"]:
         return self._extensions
 
     @staticmethod
@@ -341,4 +393,4 @@ class Application():
         else:
             return os.path.abspath(os.path.join(os.path.dirname(sys.executable), ".."))
 
-    _instance = None
+    _instance = None    # type: Application

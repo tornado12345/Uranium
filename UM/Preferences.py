@@ -1,5 +1,5 @@
 # Copyright (c) 2015 Ultimaker B.V.
-# Uranium is released under the terms of the AGPLv3 or higher.
+# Uranium is released under the terms of the LGPLv3 or higher.
 
 import configparser
 
@@ -17,11 +17,11 @@ MimeTypeDatabase.addMimeType(
     )
 )
 
-##      Preferences are application based settings that are saved for future use. 
+##      Preferences are application based settings that are saved for future use.
 #       Typical preferences would be window size, standard machine, etc.
 @signalemitter
 class Preferences:
-    Version = 3
+    Version = 6
 
     def __init__(self):
         super().__init__()
@@ -41,6 +41,16 @@ class Preferences:
             self._preferences[group] = {}
 
         self._preferences[group][key] = _Preference(key, default_value)
+
+    def removePreference(self, key: str) -> None:
+        preference = self._findPreference(key)
+        if preference is None:
+            Logger.log("i", "Preferences '%s' doesn't exist, nothing to remove.", key)
+            return
+
+        group, key = self._splitKey(key)
+        del self._preferences[group][key]
+        Logger.log("i", "Preferences '%s' removed.", key)
 
     ##  Changes the default value of a preference.
     #
@@ -94,6 +104,9 @@ class Preferences:
         if not self._parser:
             return
 
+        self.__initializeSettings()
+
+    def __initializeSettings(self):
         for group, group_entries in self._parser.items():
             if group == "DEFAULT":
                 continue
@@ -119,15 +132,18 @@ class Preferences:
         parser["general"]["version"] = str(Preferences.Version)
 
         try:
-            with SaveFile(file, "wt") as save_file:
-                parser.write(save_file)
+            if hasattr(file, "read"):  # If it already is a stream like object, write right away
+                parser.write(file)
+            else:
+                with SaveFile(file, "wt") as save_file:
+                    parser.write(save_file)
         except Exception as e:
             Logger.log("e", "Failed to write preferences to %s: %s", file, str(e))
 
     preferenceChanged = Signal()
 
     @classmethod
-    def getInstance(cls):
+    def getInstance(cls) -> "Preferences":
         if not cls._instance:
             cls._instance = Preferences()
 
@@ -158,20 +174,60 @@ class Preferences:
             return self._parser
         try:
             self._parser = configparser.ConfigParser(interpolation = None) #pylint: disable=bad-whitespace
-            self._parser.read(file, encoding = "utf-8")
+            if hasattr(file, "read"):
+                self._parser.read_file(file)
+            else:
+                self._parser.read(file, encoding = "utf-8")
 
             if self._parser["general"]["version"] != str(Preferences.Version):
                 Logger.log("w", "Old config file found, ignoring")
                 self._parser = None
                 return
-        except Exception as e:
-            Logger.log("e", "An exception occured while trying to read preferences file: %s", e)
+        except Exception:
+            Logger.logException("e", "An exception occured while trying to read preferences file")
             self._parser = None
             return
 
         del self._parser["general"]["version"]
 
-    _instance = None
+    _instance = None  # type: Preferences
+
+    ##  Extract data from string and store it in the Configuration parser.
+    def deserialize(self, serialized: str):
+        updated_preferences = self.__updateSerialized(serialized)
+        self._parser = configparser.ConfigParser(interpolation=None)
+        self._parser.read_string(updated_preferences)
+        has_version = "general" in self._parser and "version" in self._parser["general"]
+
+        if has_version:
+            if self._parser["general"]["version"] != str(Preferences.Version):
+                Logger.log("w", "Could not deserialize preferences from loaded project")
+                self._parser = None
+                return
+        else:
+            return
+
+        self.__initializeSettings()
+
+    ##  Updates the given serialized data to the latest version.
+    def __updateSerialized(self, serialized: str) -> str:
+        configuration_type = "preferences"
+
+        try:
+            import UM.VersionUpgradeManager
+            version = UM.VersionUpgradeManager.VersionUpgradeManager.getInstance().getFileVersion(configuration_type,
+                                                                                                  serialized)
+            if version is not None:
+                from UM.VersionUpgradeManager import VersionUpgradeManager
+                result = VersionUpgradeManager.getInstance().updateFilesData(configuration_type, version,
+                                                                             [serialized], [""])
+                if result is not None:
+                    serialized = result.files_data[0]
+            return serialized
+
+        except Exception:
+            Logger.logException("d", "An exception occured while trying to update the preferences")
+            pass
 
 class _Preference:
     def __init__(self, name, default = None, value = None): #pylint: disable=bad-whitespace

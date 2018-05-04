@@ -1,72 +1,95 @@
 // Copyright (c) 2015 Ultimaker B.V.
-// Uranium is released under the terms of the AGPLv3 or higher.
+// Uranium is released under the terms of the LGPLv3 or higher.
 
 import QtQuick 2.1
 import QtQuick.Controls 1.1
 import QtQuick.Window 2.1
 import QtQuick.Controls.Styles 1.1
+import QtQuick.Dialogs 1.2
 
 import UM 1.0 as UM
 
 import ".."
 
-PreferencesPage
-{
+PreferencesPage {
     id: preferencesPage
 
     resetEnabled: false;
 
     title: catalog.i18nc("@title:tab", "Plugins");
-    contents: ScrollView
-    {
-        anchors.fill:parent
-        frameVisible: true
-        ListView
-        {
-            id:pluginList
-            delegate: pluginDelegate
-            model: UM.PluginsModel { }
-            section.delegate: Label { text: section }
-            section.property: "type"
-            anchors.fill:parent
+    contents: Item {
+        anchors.fill: parent
+
+        Button {
+            id: installButton
+            anchors.top: movedMessage.bottom
+            anchors.topMargin: UM.Theme.getSize("default_margin").height
+            onClicked: openDialog.open()
+            text: catalog.i18nc("@action:button", "Install new plugin")
+        }
+
+        ScrollView {
+            anchors {
+                left: parent.left
+                right: parent.right
+                top: installButton.bottom
+                bottom: pluginsNote.top
+            }
+            frameVisible: true
+            ListView {
+                id:pluginList
+                delegate: pluginDelegate
+                model: UM.PluginsModel { }
+                section.delegate: Label { text: section }
+                section.property: "type"
+                anchors.fill:parent
+            }
+        }
+        Label {
+            id: pluginsNote
+
+            text: catalog.i18nc("@label", "You will need to restart the application before changes in plugins have effect.")
+            wrapMode: Text.WordWrap
+            font.italic: true
+
+            anchors.bottom: parent.bottom
         }
     }
-    Item
-    {
+
+    Item {
         SystemPalette { id: palette }
 
-        Component
-        {
+        Component {
             id: pluginDelegate
-            Rectangle
-            {
+            Rectangle {
                 width: pluginList.width;
                 height: childrenRect.height;
                 color: index % 2 ? palette.base : palette.alternateBase
 
-                CheckBox
-                {
+                CheckBox {
                     id: pluginCheckbox
                     checked: model.enabled
-                    onClicked: pluginList.model.setEnabled(model.name, checked)
+                    onClicked: pluginList.model.setEnabled(model.id, checked)
                     enabled: !model.required
-                    visible: false
+                    anchors.verticalCenter: pluginText.verticalCenter
+                    x: y
                 }
                 Button
                 {
                     id: pluginText //is a button so the user doesn't have te click inconvenientley precise to enable or disable the checkbox
                     text: model.name
-                    onClicked: pluginList.model.setEnabled(model.name, checked)
-                    tooltip: model.description
+                    enabled: !model.required
+                    onClicked:
+                    {
+                        pluginCheckbox.checked = !pluginCheckbox.checked;
+                        pluginCheckbox.clicked();
+                    }
+                    tooltip: model.description + (model.required ? ("\n" + catalog.i18nc("@label", "This plugin is required for the application to run.")) : "")
                     anchors.left: pluginCheckbox.visible ? pluginCheckbox.right : parent.left
                     anchors.right: pluginIcon.left
                     style: ButtonStyle
                     {
-                        background: Rectangle
-                        {
-                            border.width: 0
-                            color: "transparent"
-                        }
+                        background: Item {}
                         label: Label
                         {
                             renderType: Text.NativeRendering
@@ -91,8 +114,49 @@ PreferencesPage
                     }
                 }
             }
-
         }
+
+        MessageDialog
+        {
+            id: messageDialog
+            title: catalog.i18nc("@window:title", "Install Plugin");
+            standardButtons: StandardButton.Ok
+            modality: Qt.ApplicationModal
+        }
+
+        FileDialog
+        {
+            id: openDialog;
+
+            title: catalog.i18nc("@title:window", "Open file(s)")
+            modality: UM.Application.platform == "linux" ? Qt.NonModal : Qt.WindowModal;
+            nameFilters: PluginRegistry.supportedPluginExtensions
+            onAccepted:
+            {
+                var result = PluginRegistry.installPlugin(fileUrl)
+
+                messageDialog.text = result.message
+                if(result.status == "ok")
+                {
+                    messageDialog.icon = StandardIcon.Information
+                }
+                else if(result.status == "duplicate")
+                {
+                    messageDialog.icon = StandardIcon.Warning
+                }
+                else
+                {
+                    messageDialog.icon = StandardIcon.Critical
+                }
+                messageDialog.open()
+
+            }
+            onRejected:
+            {
+                console.log("Canceled")
+            }
+        }
+
         Dialog
         {
             id: about_window
@@ -106,8 +170,8 @@ PreferencesPage
 
             title: catalog.i18nc("@title:window", "About %1").arg(plugin_name)
 
-            minimumWidth: Screen.devicePixelRatio * 320
-            minimumHeight: Screen.devicePixelRatio * 240
+            minimumWidth: screenScaleFactor * 320
+            minimumHeight: screenScaleFactor * 240
             width: minimumWidth
             height: minimumHeight
 
@@ -137,21 +201,21 @@ PreferencesPage
                 id: pluginAuthorLabel
                 //: About plugin dialog author label
                 text: catalog.i18nc("@label", "Author:");
-                width: 0.4 * parent.width
+                width: (0.4 * parent.width) | 0
                 wrapMode: Text.WordWrap
                 anchors.top: pluginCaption.bottom
-                anchors.topMargin: 10
+                anchors.topMargin: 10 * screenScaleFactor
             }
 
             Label
             {
                 id: pluginAuthor;
                 text: about_window.author_text
-                width: 0.6 * parent.width
+                width: (0.6 * parent.width) | 0
                 wrapMode: Text.WordWrap
                 anchors.top: pluginCaption.bottom
                 anchors.left: pluginAuthorLabel.right
-                anchors.topMargin: 10
+                anchors.topMargin: 10 * screenScaleFactor
             }
 
             Label
@@ -159,7 +223,7 @@ PreferencesPage
                 id: pluginVersionLabel
                 //: About plugin dialog version label
                 text: catalog.i18nc("@label", "Version:");
-                width: 0.4 * parent.width
+                width: Math.round(0.4 * parent.width)
                 wrapMode: Text.WordWrap
                 anchors.top: pluginAuthor.bottom
             }
@@ -168,7 +232,7 @@ PreferencesPage
             {
                 id: pluginVersion
                 text: about_window.version_text
-                width: 0.6*parent.width
+                width: Math.round(0.6 * parent.width)
                 anchors.top: pluginAuthor.bottom
                 anchors.left: pluginVersionLabel.right
             }
@@ -181,5 +245,4 @@ PreferencesPage
             }
         }
     }
-
 }

@@ -1,4 +1,5 @@
-from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal
+from PyQt5.QtCore import QObject
+from UM.FlameProfiler import pyqtSlot
 
 # This class wraps a Python container and provides access to its elements
 #
@@ -17,6 +18,10 @@ class ContainerProxy(QObject):
 
     @pyqtSlot(str, result = "QVariant")
     def getValue(self, value):
+        return self._container.get(value, None)
+
+    @pyqtSlot(str, result="QVariantList")
+    def getValueList(self, value):
         return self._container.get(value, None)
 
     @pyqtSlot(str, "QVariant")

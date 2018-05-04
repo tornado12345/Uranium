@@ -1,5 +1,5 @@
 # Copyright (c) 2015 Ultimaker B.V.
-# Uranium is released under the terms of the AGPLv3 or higher.
+# Uranium is released under the terms of the LGPLv3 or higher.
 
 from PyQt5.QtCore import QObject, QCoreApplication, pyqtSlot, QUrl, pyqtSignal, pyqtProperty
 
@@ -16,18 +16,29 @@ class ControllerProxy(QObject):
         self._selection_pass = None
         self._tools_enabled = True
 
+        # bind needed signals
         self._controller.toolOperationStarted.connect(self._onToolOperationStarted)
         self._controller.toolOperationStopped.connect(self._onToolOperationStopped)
+        self._controller.activeStageChanged.connect(self._onActiveStageChanged)
 
     toolsEnabledChanged = pyqtSignal()
+    activeStageChanged = pyqtSignal()
 
     @pyqtProperty(bool, notify = toolsEnabledChanged)
     def toolsEnabled(self):
         return self._tools_enabled
 
+    @pyqtProperty(QObject, notify = activeStageChanged)
+    def activeStage(self):
+        return self._controller.getActiveStage()
+
     @pyqtSlot(str)
     def setActiveView(self, view):
         self._controller.setActiveView(view)
+
+    @pyqtSlot(str)
+    def setActiveStage(self, stage):
+        self._controller.setActiveStage(stage)
 
     @pyqtSlot(str)
     def setActiveTool(self, tool):
@@ -43,6 +54,22 @@ class ControllerProxy(QObject):
             op.addOperation(RemoveSceneNodeOperation(node))
         op.push()
         Selection.clear()
+
+    @pyqtSlot()
+    def enableModelRendering(self):
+        self._controller.enableModelRendering()
+
+    @pyqtSlot()
+    def disableModelRendering(self):
+        self._controller.disableModelRendering()
+
+    @pyqtSlot(str, int)
+    def rotateView(self,coordinate, angle):
+        self._controller.rotateView(coordinate, angle)
+
+    @pyqtSlot()
+    def homeView(self, angle):
+        self._controller.homeView()
 
     contextMenuRequested = pyqtSignal("quint64", arguments=["objectId"])
 
@@ -66,3 +93,6 @@ class ControllerProxy(QObject):
         self._tools_enabled = True
         self._controller.setToolsEnabled(True)
         self.toolsEnabledChanged.emit()
+
+    def _onActiveStageChanged(self):
+        self.activeStageChanged.emit()

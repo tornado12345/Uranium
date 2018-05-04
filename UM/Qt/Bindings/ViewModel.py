@@ -1,5 +1,5 @@
 # Copyright (c) 2015 Ultimaker B.V.
-# Uranium is released under the terms of the AGPLv3 or higher.
+# Uranium is released under the terms of the LGPLv3 or higher.
 
 from PyQt5.QtCore import QAbstractListModel, QCoreApplication, Qt, QVariant
 
@@ -30,6 +30,9 @@ class ViewModel(ListModel):
     def _onViewsChanged(self):
         items = []
         views = self._controller.getAllViews()
+        currentView = self._controller.getActiveView()
+        if currentView is None:
+            return
 
         for id in views:
             viewMetaData = PluginRegistry.getInstance().getMetaData(id).get("view", {})
@@ -44,8 +47,14 @@ class ViewModel(ListModel):
             iconName = viewMetaData.get("icon", "")
             weight = viewMetaData.get("weight", 0)
 
-            currentView = self._controller.getActiveView()
-            items.append({ "id": id, "name": name, "active": id == currentView.getPluginId(), "description": description, "icon": iconName, "weight": weight })
+            items.append({
+                "id": id,
+                "name": name,
+                "active": id == currentView.getPluginId(),
+                "description": description,
+                "icon": iconName,
+                "weight": weight
+            })
 
         items.sort(key = lambda t: t["weight"])
         self.setItems(items)

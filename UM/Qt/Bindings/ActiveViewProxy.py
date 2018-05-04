@@ -1,5 +1,5 @@
 # Copyright (c) 2015 Ultimaker B.V.
-# Uranium is released under the terms of the AGPLv3 or higher.
+# Uranium is released under the terms of the LGPLv3 or higher.
 
 from PyQt5.QtCore import pyqtSlot, pyqtProperty, pyqtSignal, QObject, QVariant, QUrl
 
@@ -28,7 +28,11 @@ class ActiveViewProxy(QObject):
             return QUrl()
 
         return QUrl.fromLocalFile(os.path.join(PluginRegistry.getInstance().getPluginPath(self._active_view.getPluginId()), panel_file))
-    
+
+    ##  Allows trigger backend function from QML, example: UM.ActiveTool.triggerAction("layFlat")
+    #
+    #   \param action The function name which will be triggered.
+    #   \param data The argument which will pass to the action function
     @pyqtSlot(str, QVariant)
     def triggerAction(self, action, data):
         if not self._active_view:

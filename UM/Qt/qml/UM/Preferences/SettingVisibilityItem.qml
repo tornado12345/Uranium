@@ -1,5 +1,5 @@
 // Copyright (c) 2015 Ultimaker B.V.
-// Uranium is released under the terms of the AGPLv3 or higher.
+// Uranium is released under the terms of the LGPLv3 or higher.
 
 import QtQuick 2.1
 import QtQuick.Layouts 1.1
@@ -10,13 +10,14 @@ import UM 1.2 as UM
 
 Item {
     // Use the depth of the model to move the item, but also leave space for the visibility / enabled exclamation mark.
+
     x: definition ? (definition.depth + 1)* UM.Theme.getSize("default_margin").width : UM.Theme.getSize("default_margin").width
     UM.TooltipArea
     {
         width: height;
         height: check.height;
         anchors.right: checkboxTooltipArea.left
-        anchors.rightMargin: 2
+        anchors.rightMargin: 2 * screenScaleFactor
 
         text:
         {
@@ -54,7 +55,7 @@ Item {
         UM.RecolorImage
         {
             anchors.centerIn: parent
-            width: check.height * 0.75
+            width: Math.round(check.height * 0.75) | 0
             height: width
 
             source: UM.Theme.getIcon("notice")
@@ -80,9 +81,11 @@ Item {
             checked: definition ? definition.visible: false
             enabled: definition ? !definition.prohibited: false
 
-            MouseArea {
-                anchors.fill: parent;
-                onClicked: definitionsModel.setVisible(definition.key, !check.checked);
+            MouseArea
+            {
+                anchors.fill: parent
+
+                onClicked: definitionsModel.setVisible(definition.key, !check.checked)
             }
         }
     }

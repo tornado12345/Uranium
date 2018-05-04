@@ -1,6 +1,6 @@
 # Copyright (c) 2015 Ultimaker B.V.
-# Uranium is released under the terms of the AGPLv3 or higher.
-
+# Uranium is released under the terms of the LGPLv3 or higher.
+from UM.Benchmark import Benchmark
 from UM.Tool import Tool
 from UM.Event import Event, MouseEvent, KeyEvent
 from UM.Scene.ToolHandle import ToolHandle
@@ -15,6 +15,7 @@ from UM.Operations.GroupedOperation import GroupedOperation
 from UM.Operations.SetTransformOperation import SetTransformOperation
 from UM.Operations.ScaleToBoundsOperation import ScaleToBoundsOperation
 
+from PyQt5.QtCore import Qt
 from . import ScaleToolHandle
 
 import scipy
@@ -37,11 +38,15 @@ class ScaleTool(Tool):
         self._maximum_bounds = None
         self._move_up = True
 
+        self._shortcut_key = Qt.Key_A
+
         # We use the position of the scale handle when the operation starts.
         # This is done in order to prevent runaway reactions (drag changes of 100+)
         self._saved_handle_position = None  # for non uniform drag
         self._scale_sum = 0.0  # a memory for uniform drag with snap scaling
         self._last_event = None  # for uniform drag
+
+        self._saved_node_positions = []
 
         self.setExposedProperties(
             "ScaleSnap",
@@ -61,11 +66,11 @@ class ScaleTool(Tool):
         super().event(event)
 
         if event.type == Event.ToolActivateEvent:
-            for node in Selection.getAllSelectedObjects():
+            for node in self._getSelectedObjectsWithoutSelectedAncestors():
                 node.boundingBoxChanged.connect(self.propertyChanged)
 
         if event.type == Event.ToolDeactivateEvent:
-            for node in Selection.getAllSelectedObjects():
+            for node in self._getSelectedObjectsWithoutSelectedAncestors():
                 node.boundingBoxChanged.disconnect(self.propertyChanged)
 
         # Handle modifier keys: Shift toggles snap, Control toggles uniform scaling
@@ -94,13 +99,13 @@ class ScaleTool(Tool):
             if not id:
                 return False
 
-            if ToolHandle.isAxis(id):
+            if self._handle.isAxis(id):
                 self.setLockedAxis(id)
             self._saved_handle_position = self._handle.getWorldPosition()
 
             # Save the current positions of the node, as we want to scale arround their current centres
             self._saved_node_positions = []
-            for node in Selection.getAllSelectedObjects():
+            for node in self._getSelectedObjectsWithoutSelectedAncestors():
                 self._saved_node_positions.append((node, node.getPosition()))
 
             self._scale_sum = 0.0
@@ -251,7 +256,7 @@ class ScaleTool(Tool):
     def getScaleX(self):
         if Selection.hasSelection():
             ## Ensure that the returned value is positive (mirror causes scale to be negative)
-            return abs(round(float(self._getScaleInWorldCoordinates(Selection.getSelectedObject(0)).x), 4))
+            return abs(round(float(Selection.getSelectedObject(0).getScale().x), 4))
 
         return 1.0
 
@@ -261,7 +266,7 @@ class ScaleTool(Tool):
     def getScaleY(self):
         if Selection.hasSelection():
             ## Ensure that the returned value is positive (mirror causes scale to be negative)
-            return abs(round(float(self._getScaleInWorldCoordinates(Selection.getSelectedObject(0)).y), 4))
+            return abs(round(float(Selection.getSelectedObject(0).getScale().y), 4))
 
         return 1.0
 
@@ -271,7 +276,7 @@ class ScaleTool(Tool):
     def getScaleZ(self):
         if Selection.hasSelection():
             ## Ensure that the returned value is positive (mirror causes scale to be negative)
-            return abs(round(float(self._getScaleInWorldCoordinates(Selection.getSelectedObject(0)).z), 4))
+            return abs(round(float(Selection.getSelectedObject(0).getScale().z), 4))
 
         return 1.0
 
@@ -289,7 +294,12 @@ class ScaleTool(Tool):
                     scale_vector = Vector(scale_factor, 1, 1)
                 else:
                     scale_vector = Vector(scale_factor, scale_factor, scale_factor)
-                Selection.applyOperation(ScaleOperation, scale_vector)
+
+                op = GroupedOperation()
+                for node in self._getSelectedObjectsWithoutSelectedAncestors():
+                    op.addOperation(
+                        ScaleOperation(node, scale_vector, scale_around_point=node.getWorldPosition()))
+                op.push()
 
     ##  Set the height of the selected object(s) by scaling the first selected object to a certain height
     #
@@ -305,7 +315,12 @@ class ScaleTool(Tool):
                     scale_vector = Vector(1, scale_factor, 1)
                 else:
                     scale_vector = Vector(scale_factor, scale_factor, scale_factor)
-                Selection.applyOperation(ScaleOperation, scale_vector)
+
+                op = GroupedOperation()
+                for node in self._getSelectedObjectsWithoutSelectedAncestors():
+                    op.addOperation(
+                        ScaleOperation(node, scale_vector, scale_around_point=node.getWorldPosition()))
+                op.push()
 
     ##  Set the depth of the selected object(s) by scaling the first selected object to a certain depth
     #
@@ -321,7 +336,12 @@ class ScaleTool(Tool):
                     scale_vector = Vector(1, 1, scale_factor)
                 else:
                     scale_vector = Vector(scale_factor, scale_factor, scale_factor)
-                Selection.applyOperation(ScaleOperation, scale_vector)
+
+                op = GroupedOperation()
+                for node in self._getSelectedObjectsWithoutSelectedAncestors():
+                    op.addOperation(
+                        ScaleOperation(node, scale_vector, scale_around_point=node.getWorldPosition()))
+                op.push()
 
     ##  Set the x-scale of the selected object(s) by scaling the first selected object to a certain factor
     #
@@ -329,14 +349,19 @@ class ScaleTool(Tool):
     def setScaleX(self, scale):
         obj = Selection.getSelectedObject(0)
         if obj:
-            obj_scale = self._getScaleInWorldCoordinates(obj)
+            obj_scale = obj.getScale()
             if round(float(obj_scale.x), 4) != scale:
                 scale_factor = abs(scale / obj_scale.x)
                 if self._non_uniform_scale:
                     scale_vector = Vector(scale_factor, 1, 1)
                 else:
                     scale_vector = Vector(scale_factor, scale_factor, scale_factor)
-                Selection.applyOperation(ScaleOperation, scale_vector, scale_around_point = obj.getWorldPosition())
+
+                op = GroupedOperation()
+                for node in self._getSelectedObjectsWithoutSelectedAncestors():
+                    op.addOperation(
+                        ScaleOperation(node, scale_vector, scale_around_point=node.getWorldPosition()))
+                op.push()
 
     ##  Set the y-scale of the selected object(s) by scaling the first selected object to a certain factor
     #
@@ -344,14 +369,19 @@ class ScaleTool(Tool):
     def setScaleY(self, scale):
         obj = Selection.getSelectedObject(0)
         if obj:
-            obj_scale = self._getScaleInWorldCoordinates(obj)
+            obj_scale = obj.getScale()
             if round(float(obj_scale.y), 4) != scale:
                 scale_factor = abs(scale / obj_scale.y)
                 if self._non_uniform_scale:
                     scale_vector = Vector(1, scale_factor, 1)
                 else:
                     scale_vector = Vector(scale_factor, scale_factor, scale_factor)
-                Selection.applyOperation(ScaleOperation, scale_vector, scale_around_point = obj.getWorldPosition())
+
+                op = GroupedOperation()
+                for node in self._getSelectedObjectsWithoutSelectedAncestors():
+                    op.addOperation(
+                        ScaleOperation(node, scale_vector, scale_around_point=node.getWorldPosition()))
+                op.push()
 
     ##  Set the z-scale of the selected object(s) by scaling the first selected object to a certain factor
     #
@@ -359,16 +389,22 @@ class ScaleTool(Tool):
     def setScaleZ(self, scale):
         obj = Selection.getSelectedObject(0)
         if obj:
-            obj_scale = self._getScaleInWorldCoordinates(obj)
+            obj_scale = obj.getScale()
             if round(float(obj_scale.z), 4) != scale:
                 scale_factor = abs(scale / obj_scale.z)
                 if self._non_uniform_scale:
                     scale_vector = Vector(1, 1, scale_factor)
                 else:
                     scale_vector = Vector(scale_factor, scale_factor, scale_factor)
-                Selection.applyOperation(ScaleOperation, scale_vector, scale_around_point = obj.getWorldPosition())
+
+                op = GroupedOperation()
+                for node in self._getSelectedObjectsWithoutSelectedAncestors():
+                    op.addOperation(
+                        ScaleOperation(node, scale_vector, scale_around_point=node.getWorldPosition()))
+                op.push()
 
     ##  Convenience function that gives the scale of an object in the coordinate space of the world.
+    #   The function might return wrong value if the grouped models are rotated
     #
     #   \param node type(SceneNode)
     #   \return scale type(float) scale factor (1.0 = normal scale)

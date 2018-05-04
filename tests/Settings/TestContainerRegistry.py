@@ -1,31 +1,29 @@
-# Copyright (c) 2016 Ultimaker B.V.
-# Uranium is released under the terms of the AGPLv3 or higher.
+# Copyright (c) 2017 Ultimaker B.V.
+# Uranium is released under the terms of the LGPLv3 or higher.
 
-import pytest
 import os.path
+import pytest
+from typing import Optional
 
-import UM.Settings
 import UM.PluginObject
-import UM.PluginRegistry
-import UM.Settings.DefinitionContainer
-import UM.Settings.InstanceContainer
-import UM.Settings.ContainerStack
-
-from UM.Resources import Resources
-from UM.MimeTypeDatabase import MimeType, MimeTypeDatabase
+from UM.Settings.DefinitionContainer import DefinitionContainer
+from UM.Settings.InstanceContainer import InstanceContainer
+from UM.Settings.ContainerStack import ContainerStack
+from UM.Signal import Signal
 
 ##  Fake container class to add to the container registry.
 #
 #   This allows us to test the container registry without testing the container
 #   class. If something is wrong in the container class it won't influence this
 #   test.
-class MockContainer(UM.Settings.ContainerInterface.ContainerInterface, UM.PluginObject):
+from UM.Settings.Interfaces import ContainerInterface
+
+class MockContainer(ContainerInterface, UM.PluginObject.PluginObject):
     ##  Initialise a new definition container.
     #
     #   The container will have the specified ID and all metadata in the
     #   provided dictionary.
-    def __init__(self, id, metadata):
-        self._id = id
+    def __init__(self, metadata):
         self._metadata = metadata
         self._plugin_id = "MockContainerPlugin"
 
@@ -33,7 +31,7 @@ class MockContainer(UM.Settings.ContainerInterface.ContainerInterface, UM.Plugin
     #
     #   \return The ID of the container.
     def getId(self):
-        return self._id
+        return self._metadata["id"]
 
     ##  Gets all metadata of this container.
     #
@@ -77,7 +75,7 @@ class MockContainer(UM.Settings.ContainerInterface.ContainerInterface, UM.Plugin
     ##  Gets the value of a property of a container item.
     #
     #   This method is not implemented in the mock container.
-    def getProperty(self, key, property_name):
+    def getProperty(self, key, property_name, context = None):
         raise NotImplementedError()
 
     ##  Get the value of a container item.
@@ -98,54 +96,58 @@ class MockContainer(UM.Settings.ContainerInterface.ContainerInterface, UM.Plugin
     ##  Serializes the container to a string representation.
     #
     #   This method is not implemented in the mock container.
-    def serialize(self):
+    def serialize(self, ignored_metadata_keys = None):
         raise NotImplementedError()
 
     ##  Deserializes the container from a string representation.
     #
     #   This method is not implemented in the mock container.
-    def deserialize(self, serialized):
+    def deserialize(self, serialized, file_name: Optional[str] = None):
         raise NotImplementedError()
 
-##  Creates a brand new container registry.
-#
-#   To force a new container registry, the registry is first set to None and
-#   then re-requested.
-#
-#   \return A brand new container registry.
-@pytest.fixture
-def container_registry():
-    Resources.addSearchPath(os.path.dirname(os.path.abspath(__file__)))
-    UM.Settings.ContainerRegistry._ContainerRegistry__instance = None # Reset the private instance variable every time
-    UM.PluginRegistry.getInstance().removeType("settings_container")
+    @classmethod
+    def getConfigurationTypeFromSerialized(cls, serialized: str):
+        raise NotImplementedError()
 
-    return UM.Settings.ContainerRegistry.getInstance()
+    @classmethod
+    def getVersionFromSerialized(cls, serialized):
+        raise NotImplementedError()
+
+    metaDataChanged = Signal()
 
 ##  Tests adding a container to the registry.
 #
 #   \param container_registry A new container registry from a fixture.
 def test_addContainer(container_registry):
-    definition_container_0 = UM.Settings.DefinitionContainer("a", {})
-    assert definition_container_0 not in container_registry.findDefinitionContainers() # Sanity check.
+    definition_container_0 = DefinitionContainer("a")
+    assert definition_container_0.getMetaData() not in container_registry.findDefinitionContainersMetadata() # Sanity check.
+    assert definition_container_0 not in container_registry.findDefinitionContainers()
     container_registry.addContainer(definition_container_0)
+    assert definition_container_0.getMetaData() in container_registry.findDefinitionContainersMetadata()
     assert definition_container_0 in container_registry.findDefinitionContainers()
 
     # Add a second one of the same type.
-    definition_container_1 = UM.Settings.DefinitionContainer("b", {})
+    definition_container_1 = DefinitionContainer("b")
+    assert definition_container_1.getMetaData() not in container_registry.findDefinitionContainersMetadata() # Sanity check.
     assert definition_container_1 not in container_registry.findDefinitionContainers() # Sanity check.
     container_registry.addContainer(definition_container_1)
+    assert definition_container_1.getMetaData() in container_registry.findDefinitionContainersMetadata()
     assert definition_container_1 in container_registry.findDefinitionContainers()
+    assert definition_container_0.getMetaData() in container_registry.findDefinitionContainersMetadata()
     assert definition_container_0 in container_registry.findDefinitionContainers()
 
     # Add a container with the same type and same ID.
-    definition_container_1_clone = UM.Settings.DefinitionContainer("b", {})
+    definition_container_1_clone = DefinitionContainer("b")
     container_registry.addContainer(definition_container_1_clone)
-    assert definition_container_1_clone not in container_registry.findDefinitionContainers() # Didn't get added!
+    #Since comparing metadata is a deep comparison, you'll find that the metadata of the clone got in there. But it's not, it's just exactly the same as the original metadata so it appears as if it's in there.
+    assert definition_container_1_clone not in container_registry.findDefinitionContainers()
 
     # For good measure, add a container with a different type too.
-    instance_container_1 = UM.Settings.InstanceContainer("a")
-    assert instance_container_1 not in container_registry.findDefinitionContainers() # Sanity check.
+    instance_container_1 = InstanceContainer("a")
+    assert instance_container_1.getMetaData() not in container_registry.findDefinitionContainersMetadata() # Sanity check.
+    assert instance_container_1 not in container_registry.findDefinitionContainers()
     container_registry.addContainer(instance_container_1)
+    assert instance_container_1.getMetaData() not in container_registry.findDefinitionContainersMetadata()
     assert instance_container_1 not in container_registry.findDefinitionContainers()
 
 ##  Tests adding a container type to the registry.
@@ -173,7 +175,7 @@ def test_addContainerType(container_registry, plugin_registry):
 #   \param container_registry A newly created container registry instance, from
 #   a fixture.
 def test_create(container_registry):
-    assert container_registry != None
+    assert container_registry is not None
 
 ##  Individual test cases for test_findDefinitionContainers as well as
 #   test_findInstanceContainers.
@@ -271,10 +273,7 @@ test_findContainers_data = [
 @pytest.mark.parametrize("data", test_findContainers_data)
 def test_findDefinitionContainers(container_registry, data):
     for container in data["containers"]: # Fill the registry with mock containers.
-        container = container.copy()
-        container_id = container["id"]
-        del container["id"]
-        definition_container = UM.Settings.DefinitionContainer(container_id)
+        definition_container = DefinitionContainer(container["id"])
         for key, value in container.items(): # Copy data into metadata.
             definition_container.getMetaData()[key] = value
         container_registry.addContainer(definition_container)
@@ -293,7 +292,7 @@ def test_findInstanceContainers(container_registry, data):
         container = container.copy()
         container_id = container["id"]
         del container["id"]
-        instance_container = UM.Settings.InstanceContainer(container_id)
+        instance_container = InstanceContainer(container_id)
         for key, value in container.items(): # Copy data into metadata.
             instance_container.getMetaData()[key] = value
         container_registry.addContainer(instance_container)
@@ -312,7 +311,7 @@ def test_findContainerStacks(container_registry, data):
         container = container.copy()
         container_id = container["id"]
         del container["id"]
-        container_stack = UM.Settings.ContainerStack(container_id)
+        container_stack = ContainerStack(container_id)
         for key, value in container.items(): # Copy data into metadata.
             container_stack.getMetaData()[key] = value
         container_registry.addContainer(container_stack)
@@ -327,20 +326,20 @@ def test_findContainerStacks(container_registry, data):
 def test_load(container_registry):
     container_registry.load()
 
-    definitions = container_registry.findDefinitionContainers(id = "single_setting")
+    definitions = container_registry.findDefinitionContainersMetadata(id = "single_setting")
     assert len(definitions) == 1
 
     definition = definitions[0]
-    assert definition.getId() == "single_setting"
+    assert definition["id"] == "single_setting"
 
-    definitions = container_registry.findDefinitionContainers(author = "Ultimaker")
+    definitions = container_registry.findDefinitionContainersMetadata(author = "Ultimaker")
     assert len(definitions) == 3
 
     ids_found = []
     for definition in definitions:
-        ids_found.append(definition.getId())
+        ids_found.append(definition["id"])
 
-    assert "metadata" in ids_found
+    assert "metadata_definition" in ids_found
     assert "single_setting" in ids_found
     assert "inherits" in ids_found
 
@@ -350,14 +349,14 @@ def test_load(container_registry):
 def test_uniqueName(container_registry):
     assert container_registry.uniqueName("test") == "test" #No collisions.
 
-    mock_container = MockContainer(id = "test", metadata = { })
+    mock_container = MockContainer(metadata = {"id": "test"})
     container_registry.addContainer(mock_container)
     assert container_registry.uniqueName("test") == "test #2" #One collision.
     assert container_registry.uniqueName("test") == "test #2" #The check for unique name doesn't have influence on the registry.
     assert container_registry.uniqueName("test #2") == "test #2"
     assert container_registry.uniqueName("TEST").lower() == "test #2"
 
-    mock_container = MockContainer(id = "test #2", metadata = { })
+    mock_container = MockContainer(metadata = {"id": "test #2"})
     container_registry.addContainer(mock_container)
     assert container_registry.uniqueName("test") == "test #3" #Two collisions.
     assert container_registry.uniqueName("test #2") == "test #3" #The ' #2' shouldn't count towards the index.
@@ -366,11 +365,21 @@ def test_uniqueName(container_registry):
     assert container_registry.uniqueName("") == "Profile" #Empty base names should be filled in with a default base name 'profile'.
     assert container_registry.uniqueName(" #2") == "Profile"
 
-    mock_container = MockContainer(id = "Profile", metadata = { })
+    mock_container = MockContainer(metadata = {"id": "Profile"})
     container_registry.addContainer(mock_container)
     assert container_registry.uniqueName("") == "Profile #2" #Empty base names should be filled in with a default base name 'profile'.
     assert container_registry.uniqueName(" #2") == "Profile #2"
     assert container_registry.uniqueName("Profile #2") == "Profile #2"
+
+    # Reproduce steps for issue CURA-2165 to verify the behaviour is still correct.
+    mock_container = MockContainer(metadata = {"id": "carlo #3"})
+    container_registry.addContainer(mock_container)
+    mock_container = MockContainer(metadata = {"id": "carlo #4"})
+    container_registry.addContainer(mock_container)
+    mock_container = MockContainer(metadata = {"id": "carlo #6"})
+    container_registry.addContainer(mock_container)
+
+    assert container_registry.uniqueName("carlo #7") == "carlo #7"
 
 ##  Helper function to verify if the metadata of the answers matches required
 #   metadata.
@@ -386,13 +395,8 @@ def _verifyMetaDataMatches(answer, ground_truth):
 
     matches = 0
     for result in answer: # Go through all results and match them with our expected data.
-        for required in list(ground_truth): # Iterate over a copy of the list so we do not modify the original data.
-            if "id" in required: # Special casing for ID since that is not in the metadata.
-                if result.getId() != required["id"]:
-                    continue # No match.
-                del required["id"] # Remove ID from the expected metadata since it is not part of the metadata.
-
-            if result.getMetaData() == required:
+        for required in ground_truth:
+            if result.getMetaData().items() >= required.items():
                 # If the metadata matches, we know this entry is valid.
                 # Note that this requires specifying all metadata in the expected results.
                 matches += 1

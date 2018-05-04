@@ -17,10 +17,11 @@ class ContainerStacksModel(ListModel):
         self.addRoleName(self.NameRole, "name")
         self.addRoleName(self.IdRole, "id")
         self.addRoleName(self.MetaDataRole, "metadata")
-        self._container_stacks = ContainerRegistry.getInstance().findContainerStacks()
+        self._container_stacks = []
 
         # Listen to changes
         ContainerRegistry.getInstance().containerAdded.connect(self._onContainerChanged)
+        ContainerRegistry.getInstance().containerMetaDataChanged.connect(self._onContainerChanged)
         ContainerRegistry.getInstance().containerRemoved.connect(self._onContainerChanged)
         self._filter_dict = {}
         self._update()
@@ -38,7 +39,6 @@ class ContainerStacksModel(ListModel):
     ##  Private convenience function to reset & repopulate the model.
     def _update(self):
         items = []
-
         # Remove all connections
         for container in self._container_stacks:
             container.nameChanged.disconnect(self._onContainerNameChanged)
