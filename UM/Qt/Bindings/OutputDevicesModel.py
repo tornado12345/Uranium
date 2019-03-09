@@ -1,13 +1,13 @@
-# Copyright (c) 2015 Ultimaker B.V.
+# Copyright (c) 2018 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 
 from PyQt5.QtCore import Qt, pyqtSlot, pyqtProperty, pyqtSignal
 
 from UM.Application import Application
 from UM.Qt.ListModel import ListModel
-from UM.OutputDevice import OutputDeviceError
 
-import time
+from PyQt5.QtQml import QQmlEngine
+
 
 ##  A list model providing a list of all registered OutputDevice instances.
 #
@@ -32,6 +32,8 @@ class OutputDevicesModel(ListModel):
 
     def __init__(self, parent = None):
         super().__init__(parent)
+        # Ensure that this model doesn't get garbage collected (Now the bound object is destroyed when the wrapper is)
+        QQmlEngine.setObjectOwnership(self, QQmlEngine.CppOwnership)
         self._device_manager = Application.getInstance().getOutputDeviceManager()
 
         self.addRoleName(self.IdRole, "id")
@@ -56,7 +58,7 @@ class OutputDevicesModel(ListModel):
 
     @pyqtProperty(int, notify = outputDevicesChanged)
     def deviceCount(self):
-        return self.rowCount()
+        return self.count
 
     def _update(self):
         self.beginResetModel()

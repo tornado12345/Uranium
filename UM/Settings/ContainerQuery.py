@@ -1,8 +1,12 @@
-# Copyright (c) 2017 Ultimaker B.V.
+# Copyright (c) 2018 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 
 import re
-from typing import Optional
+from typing import Any, cast, Dict, Iterable, List, Optional, Type, TYPE_CHECKING
+from UM.Logger import Logger
+
+if TYPE_CHECKING:
+    from UM.Settings.ContainerRegistry import ContainerRegistry
 
 ##  Wrapper class to perform a search for a certain set of containers.
 #
@@ -19,13 +23,13 @@ class ContainerQuery:
     #   \param container_type A specific container class that should be filtered for.
     #   \param ignore_case Whether or not the query should be case sensitive.
     #   \param kwargs A dict of key, value pairs that should be searched for.
-    def __init__(self, registry, *, ignore_case = False, **kwargs):
+    def __init__(self, registry: "ContainerRegistry", *, ignore_case = False, **kwargs: Any) -> None:
         self._registry = registry
 
         self._ignore_case = ignore_case
         self._kwargs = kwargs
 
-        self._result = None
+        self._result = None  # type: Optional[List[Dict[str, Any]]]
 
     ##  Get the class of the containers that this query should find, if any.
     #
@@ -36,19 +40,19 @@ class ContainerQuery:
     ##  Retrieve the result of this query.
     #
     #   \return A list of containers matching this query, or None if the query was not executed.
-    def getResult(self):
+    def getResult(self) -> Optional[List[Dict[str, Any]]]:
         return self._result
 
     ##  Check to see if this is a very simple query that looks up a single container by ID.
     #
     #   \return True if this query is case sensitive, has only 1 thing to search for and that thing is "id".
-    def isIdOnly(self):
+    def isIdOnly(self) -> bool:
         return len(self._kwargs) == 1 and not self._ignore_case and "id" in self._kwargs
 
     ##  Check to see if any of the kwargs is a Dict, which is not hashable for query caching.
     #
     #   \return True if this query is hashable.
-    def isHashable(self):
+    def isHashable(self) -> bool:
         for kwarg in self._kwargs.values():
             if isinstance(kwarg, dict):
                 return False
@@ -59,25 +63,29 @@ class ContainerQuery:
     #   This will search the container metadata of the ContainerRegistry based
     #   on the arguments provided to this class' constructor. After it is done,
     #   the result can be retrieved with getResult().
-    def execute(self, candidates = None):
+    def execute(self, candidates: Optional[List[Any]] = None) -> None:
         if candidates is None:
             candidates = list(self._registry.metadata.values())
+        filtered_candidates = cast(Iterable, candidates)
 
-        #Filter on all the key-word arguments.
+        # Filter on all the key-word arguments.
         for key, value in self._kwargs.items():
             if isinstance(value, str):
-                if ("*" or "|") in value:
+                if value.startswith("[") and value.endswith("]"):
+                    # With [token1|token2|token3|...], we try to find if any of the given tokens is present in the value
+                    key_filter = lambda candidate, key = key, value = value: self._matchRegMultipleTokens(candidate, key, value)
+                elif ("*" or "|") in value:
                     key_filter = lambda candidate, key = key, value = value: self._matchRegExp(candidate, key, value)
                 else:
                     key_filter = lambda candidate, key = key, value = value: self._matchString(candidate, key, value)
             else:
                 key_filter = lambda candidate, key = key, value = value: self._matchType(candidate, key, value)
-            candidates = filter(key_filter, candidates)
+            filtered_candidates = filter(key_filter, filtered_candidates)
 
-        #Execute all filters.
-        self._result = list(candidates)
+        # Execute all filters.
+        self._result = list(filtered_candidates)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self.__key())
 
     def __eq__(self, other):
@@ -90,10 +98,10 @@ class ContainerQuery:
     # protected:
 
     # Check to see if a container matches with a regular expression
-    def _matchRegExp(self, metadata, property_name, value):
+    def _matchRegExp(self, metadata: Dict[str, Any], property_name: str, value: str):
         if property_name not in metadata:
             return False
-        value = re.escape(value) #Escape for regex patterns.
+        value = re.escape(value)  # Escape for regex patterns.
         value = "^" + value.replace("\\*", ".*").replace("\\(", "(").replace("\\)", ")").replace("\\|", "|") + "$" #Instead of (now escaped) asterisks, match on any string. Also add anchors for a complete match.
         if self._ignore_case:
             value_pattern = re.compile(value, re.IGNORECASE)
@@ -102,21 +110,47 @@ class ContainerQuery:
 
         return value_pattern.match(str(metadata[property_name]))
 
+    def _matchRegMultipleTokens(self, metadata: Dict[str, Any], property_name: str, value: str):
+        if property_name not in metadata:
+            return False
+
+        # Use pattern /^(token1|token2|token3|...)$/ to look for any match of the given tokens
+        value = "^" + value.replace("[", "(").replace("]", ")") + "$" #Match on any string and add anchors for a complete match.
+        if self._ignore_case:
+            value_pattern = re.compile(value, re.IGNORECASE)
+        else:
+            value_pattern = re.compile(value)
+
+        return value_pattern.match(str(metadata[property_name]))
+
     # Check to see if a container matches with a string
-    def _matchString(self, metadata, property_name, value):
+    def _matchString(self, metadata: Dict[str, Any], property_name: str, value: str) -> bool:
         if property_name not in metadata:
             return False
         value = self._maybeLowercase(value)
         return value == self._maybeLowercase(str(metadata[property_name]))
 
     # Check to see if a container matches with a specific typed property
-    def _matchType(self, metadata, property_name, value):
+    def _matchType(self, metadata: Dict[str, Any], property_name: str, value: Type):
         if property_name == "container_type":
-            return issubclass(metadata.get(property_name), value) #Also allow subclasses.
-        return value == metadata.get(property_name) #If the metadata entry doesn't exist, match on None.
+            container_type = metadata.get(property_name)
+            if isinstance(container_type, type):
+                try:
+                    return issubclass(container_type, value)  # Also allow subclasses.
+                except TypeError:
+                    # Since the type error that we got is extremely not helpful, we re-raise it with more info.
+                    raise TypeError("The value {value} of the property {property} is not a type but a {type}: {metadata}"
+                                    .format(value = value, property = property_name, type = type(value), metadata = metadata))
+            else:
+                # We attempted to match something that isn't a type.
+                Logger.log("w", "Container type {container_type} is not a type but a {type}: {metadata}"
+                           .format(container_type=container_type, type=type(container_type), metadata=metadata))
+                return False
+
+        return value == metadata.get(property_name)  # If the metadata entry doesn't exist, match on None.
 
     # Helper function to simplify ignore case handling
-    def _maybeLowercase(self, value):
+    def _maybeLowercase(self, value: str) -> str:
         if self._ignore_case:
             return value.lower()
 
@@ -124,4 +158,4 @@ class ContainerQuery:
 
     # Private helper function for __hash__ and __eq__
     def __key(self):
-        return (type(self), self._ignore_case, tuple(self._kwargs.items()))
+        return type(self), self._ignore_case, tuple(self._kwargs.items())

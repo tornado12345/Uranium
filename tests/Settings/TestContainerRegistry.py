@@ -1,119 +1,19 @@
-# Copyright (c) 2017 Ultimaker B.V.
+# Copyright (c) 2018 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 
-import os.path
-import pytest
-from typing import Optional
+import os
+from unittest.mock import MagicMock
 
-import UM.PluginObject
+import pytest
+
+from UM.Resources import Resources
 from UM.Settings.DefinitionContainer import DefinitionContainer
 from UM.Settings.InstanceContainer import InstanceContainer
 from UM.Settings.ContainerStack import ContainerStack
-from UM.Signal import Signal
+from MockContainer import MockContainer
 
-##  Fake container class to add to the container registry.
-#
-#   This allows us to test the container registry without testing the container
-#   class. If something is wrong in the container class it won't influence this
-#   test.
-from UM.Settings.Interfaces import ContainerInterface
+Resources.addSearchPath(os.path.dirname(os.path.abspath(__file__)))
 
-class MockContainer(ContainerInterface, UM.PluginObject.PluginObject):
-    ##  Initialise a new definition container.
-    #
-    #   The container will have the specified ID and all metadata in the
-    #   provided dictionary.
-    def __init__(self, metadata):
-        self._metadata = metadata
-        self._plugin_id = "MockContainerPlugin"
-
-    ##  Gets the ID that was provided at initialisation.
-    #
-    #   \return The ID of the container.
-    def getId(self):
-        return self._metadata["id"]
-
-    ##  Gets all metadata of this container.
-    #
-    #   This returns the metadata dictionary that was provided in the
-    #   constructor of this mock container.
-    #
-    #   \return The metadata for this container.
-    def getMetaData(self):
-        return self._metadata
-
-    ##  Gets a metadata entry from the metadata dictionary.
-    #
-    #   \param key The key of the metadata entry.
-    #   \return The value of the metadata entry, or None if there is no such
-    #   entry.
-    def getMetaDataEntry(self, entry, default = None):
-        if entry in self._metadata:
-            return self._metadata[entry]
-        return default
-
-    ##  Gets a human-readable name for this container.
-    #
-    #   \return Always returns "MockContainer".
-    def getName(self):
-        return "MockContainer"
-
-    ##  Get whether the container item is stored on a read only location in the filesystem.
-    #
-    #   \return Always returns False
-    def isReadOnly(self):
-        return False
-
-    ##  Mock get path
-    def getPath(self):
-        return "/path/to/the/light/side"
-
-    ##  Mock set path
-    def setPath(self, path):
-        pass
-
-    ##  Gets the value of a property of a container item.
-    #
-    #   This method is not implemented in the mock container.
-    def getProperty(self, key, property_name, context = None):
-        raise NotImplementedError()
-
-    ##  Get the value of a container item.
-    #
-    #   Since this mock container cannot contain any items, it always returns
-    #   None.
-    #
-    #   \return Always returns None.
-    def getValue(self, key):
-        pass
-
-    ##  Get whether the container item has a specific property.
-    #
-    #   This method is not implemented in the mock container.
-    def hasProperty(self, key, property_name):
-        raise NotImplementedError()
-
-    ##  Serializes the container to a string representation.
-    #
-    #   This method is not implemented in the mock container.
-    def serialize(self, ignored_metadata_keys = None):
-        raise NotImplementedError()
-
-    ##  Deserializes the container from a string representation.
-    #
-    #   This method is not implemented in the mock container.
-    def deserialize(self, serialized, file_name: Optional[str] = None):
-        raise NotImplementedError()
-
-    @classmethod
-    def getConfigurationTypeFromSerialized(cls, serialized: str):
-        raise NotImplementedError()
-
-    @classmethod
-    def getVersionFromSerialized(cls, serialized):
-        raise NotImplementedError()
-
-    metaDataChanged = Signal()
 
 ##  Tests adding a container to the registry.
 #
@@ -167,6 +67,72 @@ def test_addContainerType(container_registry, plugin_registry):
 
     with pytest.raises(Exception):
         container_registry.addContainerType(None)
+
+
+def test_readOnly(container_registry):
+    assert not container_registry.isReadOnly("NotAContainerThatIsLoaded")
+
+    test_container = DefinitionContainer("omgzomg")
+    container_registry.addContainer(test_container)
+
+    mock_provider = MagicMock()
+    mock_provider.isReadOnly = MagicMock(return_value = True)
+    container_registry.source_provider = {"omgzomg": mock_provider}
+    assert container_registry.isReadOnly("omgzomg")
+
+
+def test_getContainerFilePathByID(container_registry):
+    # There is no provider and the container isn't even there.
+    assert container_registry.getContainerFilePathById("NotAContainerThatIsLoaded") is None
+
+    test_container = DefinitionContainer("omgzomg")
+    container_registry.addContainer(test_container)
+
+    mock_provider = MagicMock()
+    mock_provider.getContainerFilePathById = MagicMock(return_value="")
+    container_registry.source_provider = {"omgzomg": mock_provider}
+    assert container_registry.getContainerFilePathById("omgzomg") == ""
+
+
+def test_isLoaded(container_registry):
+    assert not container_registry.isLoaded("NotAContainerThatIsLoaded")
+    test_container = DefinitionContainer("omgzomg")
+    container_registry.addContainer(test_container)
+    assert container_registry.isLoaded("omgzomg")
+
+
+def test_removeContainer(container_registry):
+    # Removing a container that isn't added shouldn't break
+    container_registry.removeContainer("NotAContainerThatIsLoaded")
+
+    test_container = DefinitionContainer("omgzomg")
+    container_registry.addContainer(test_container)
+    container_registry.removeContainer("omgzomg")
+    assert not container_registry.isLoaded("omgzomg")
+
+
+def test_renameContainer(container_registry):
+    # Ensure that renaming an unknown container doesn't break
+    container_registry.renameContainer("ContainerThatDoesntExist", "whatever")
+
+    test_container = InstanceContainer("omgzomg")
+    container_registry.addContainer(test_container)
+
+    # Attempting a rename to the same name should not mark the container as dirty.
+    container_registry.renameContainer("omgzomg", "omgzomg")
+    assert "omgzomg" not in [container.getId() for container in container_registry.findDirtyContainers()]
+
+    container_registry.renameContainer("omgzomg", "BEEP")
+    assert test_container.getMetaDataEntry("name") == "BEEP"
+    # Ensure that the container is marked as dirty
+    assert "omgzomg" in [container.getId() for container in container_registry.findDirtyContainers()]
+
+    # Rename the container and also try to give it a new ID
+    container_registry.renameContainer("omgzomg", "BEEPz", "omgzomg2")
+    assert "omgzomg2" in [container.getId() for container in container_registry.findDirtyContainers()]
+    # The old ID should not be in the list of dirty containers now.
+    assert "omgzomg" not in [container.getId() for container in container_registry.findDirtyContainers()]
+
 
 ##  Tests the creation of the container registry.
 #
@@ -320,6 +286,7 @@ def test_findContainerStacks(container_registry, data):
 
     _verifyMetaDataMatches(results, data["result"])
 
+
 ##  Tests the loading of containers into the registry.
 #
 #   \param container_registry A new container registry from a fixture.
@@ -342,6 +309,37 @@ def test_load(container_registry):
     assert "metadata_definition" in ids_found
     assert "single_setting" in ids_found
     assert "inherits" in ids_found
+
+
+##  Test that uses the lazy loading part of the registry. Instead of loading eveyrthing, we load the metadata
+#   so that the containers can be loaded just in time.
+def test_loadAllMetada(container_registry):
+    # Before we start, the container should not even be there.
+    instances_before = container_registry.findInstanceContainersMetadata(author="Ultimaker")
+    assert len(instances_before) == 0
+
+    container_registry.loadAllMetadata()
+
+    instances = container_registry.findInstanceContainersMetadata(author="Ultimaker")
+    assert len(instances) == 1
+
+    # Since we only loaded the metadata, the actual container should not be loaded just yet.
+    assert not container_registry.isLoaded(instances[0].get("id"))
+
+    # As we asked for it, the lazy loading should kick in and actually load it.
+    container_registry.findInstanceContainers(id = instances[0].get("id"))
+    assert container_registry.isLoaded(instances[0].get("id"))
+
+
+def test_findLazyLoadedContainers(container_registry):
+    container_registry.loadAllMetadata()
+    container_registry.containerLoadComplete.emit = MagicMock()
+    # Only metadata should be loaded at this moment, so no loadComplete signals should have been fired.
+    assert container_registry.containerLoadComplete.emit.call_count == 0
+    result = container_registry.findContainers(id = "single_setting")
+    assert len(result) == 1
+    assert container_registry.containerLoadComplete.emit.call_count == 1
+
 
 ##  Tests the making of a unique name for containers in the registry.
 #

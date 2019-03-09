@@ -1,5 +1,6 @@
 # Copyright (c) 2017 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
+from typing import Optional
 
 from PyQt5.QtCore import QObject, pyqtProperty, Q_ENUMS, pyqtSignal
 from UM.FlameProfiler import pyqtSlot
@@ -28,7 +29,7 @@ class Duration(QObject):
     #
     #   \param duration The duration in seconds. If this is None (the default), an invalid Duration object will be created.
     #   \param parent The QObject parent.
-    def __init__(self, duration = None, parent = None):
+    def __init__(self, duration: Optional[int] = None, parent = None) -> None:
         super().__init__(parent)
 
         self._days = -1
@@ -36,7 +37,7 @@ class Duration(QObject):
         self._minutes = -1
         self._seconds = -1
 
-        if duration != None:
+        if duration is not None:
             self.setDuration(duration)
 
     durationChanged = pyqtSignal()
@@ -96,9 +97,12 @@ class Duration(QObject):
 
         self.durationChanged.emit()
 
-    ##  Get a string representation of this object that can be used to display in interfaces.
+    ##  Get a string representation of this object that can be used to display
+    #   in interfaces.
     #
-    #   This is not called toString() primarily because that conflicts with JavaScript"s toString()
+    #   This is not called toString() primarily because that conflicts with
+    #   JavaScript's toString().
+    #   \return A human-readable string representation of this duration.
     @pyqtSlot(int, result = str)
     def getDisplayString(self, display_format = DurationFormat.Format.Short):
         if display_format == DurationFormat.Format.Seconds:
@@ -119,3 +123,11 @@ class Duration(QObject):
             return "%02d:%02d:%02d" % (self._days * 24 + self._hours, self._minutes, self._seconds)
 
         return ""
+
+    ##  Get an integer representation of this duration.
+    #
+    #   The integer contains the number of seconds in the duration. Convert it
+    #   back to a Duration instance by providing the number of seconds to the
+    #   constructor.
+    def __int__(self):
+        return self._days * 3600 * 24 + self._hours * 3600 + self._minutes * 60 + self._seconds

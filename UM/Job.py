@@ -1,11 +1,11 @@
-# Copyright (c) 2015 Ultimaker B.V.
+# Copyright (c) 2018 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 
 import time
-
-from UM.Signal import Signal, signalemitter
+from typing import Any
 
 from UM.JobQueue import JobQueue
+from UM.Signal import Signal, signalemitter
 
 
 ##  Base class for things that should be performed in a thread.
@@ -20,7 +20,8 @@ class Job:
         super().__init__()
         self._running = False   # type: bool
         self._finished = False  # type: bool
-        self._result = None     # type: any
+        self._result = None     # type: Any
+        self._message = ""      # type: str
         self._error = None
 
     ##  Perform the actual task of this job. Should be reimplemented by subclasses.
@@ -28,16 +29,24 @@ class Job:
     def run(self):
         raise NotImplementedError()
 
+    # Get optional message
+    def getMessage(self) -> str:
+        return self._message
+
+    # Set optional message
+    def setMessage(self, message: str) -> None:
+        self._message = message
+
     ##  Get the result of the job.
     #
     #   The actual result object returned by this method is dependant on the implementation.
-    def getResult(self):
+    def getResult(self) -> Any:
         return self._result
 
     ##  Set the result of this job.
     #
     #   This should be called by run() to set the actual result of the Job.
-    def setResult(self, result: any):
+    def setResult(self, result: Any):
         self._result = result
 
     ##  Set an exception that was thrown while the job was being executed.
@@ -46,7 +55,7 @@ class Job:
     #   to execute properly.
     #
     #   \param error \type{Exception} The exception to set.
-    def setError(self, error: Exception):
+    def setError(self, error: Exception) -> None:
         self._error = error
 
     ##  Start the job.
@@ -54,14 +63,14 @@ class Job:
     #   This will put the Job into the JobQueue to be processed whenever a thread is available.
     #
     #   \sa JobQueue::add()
-    def start(self):
+    def start(self) -> None:
         JobQueue.getInstance().add(self)
 
     ##  Cancel the job.
     #
     #   This will remove the Job from the JobQueue. If the run() function has already been called,
     #   this will do nothing.
-    def cancel(self):
+    def cancel(self) -> None:
         JobQueue.getInstance().remove(self)
 
     ##  Check whether the job is currently running.
@@ -105,5 +114,5 @@ class Job:
     #   forces a GIL release and allows a different thread to start processing
     #   if it is waiting.
     @staticmethod
-    def yieldThread():
+    def yieldThread() -> None:
         time.sleep(0)  # Sleeping for 0 introduces no delay but does allow context switching.

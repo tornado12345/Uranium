@@ -11,7 +11,7 @@ Item
     id: base
     width: childrenRect.width
     height: childrenRect.height
-    UM.I18nCatalog { id: catalog; name:"uranium"}
+    UM.I18nCatalog { id: catalog; name: "uranium"}
 
     property string xText
     property string yText
@@ -41,6 +41,11 @@ Item
         return output;
     }
 
+    function selectTextInTextfield(selected_item){
+        selected_item.selectAll()
+        selected_item.focus = true
+    }
+
     Grid
     {
         id: textfields;
@@ -52,31 +57,37 @@ Item
         flow: Grid.TopToBottom;
         spacing: Math.round(UM.Theme.getSize("default_margin").width / 2);
 
-        Text
+        Label
         {
             height: UM.Theme.getSize("setting_control").height;
             text: "X";
             font: UM.Theme.getFont("default");
             color: UM.Theme.getColor("x_axis");
             verticalAlignment: Text.AlignVCenter;
+            renderType: Text.NativeRendering
+            width: Math.ceil(contentWidth) //Make sure that the grid cells have an integer width.
         }
 
-        Text
+        Label
         {
             height: UM.Theme.getSize("setting_control").height;
             text: "Y";
             font: UM.Theme.getFont("default");
             color: UM.Theme.getColor("z_axis"); // This is intentional. The internal axis are switched.
             verticalAlignment: Text.AlignVCenter;
+            renderType: Text.NativeRendering
+            width: Math.ceil(contentWidth) //Make sure that the grid cells have an integer width.
         }
 
-        Text
+        Label
         {
             height: UM.Theme.getSize("setting_control").height;
             text: "Z";
             font: UM.Theme.getFont("default");
             color: UM.Theme.getColor("y_axis"); // This is intentional. The internal axis are switched.
             verticalAlignment: Text.AlignVCenter;
+            renderType: Text.NativeRendering
+            width: Math.ceil(contentWidth) //Make sure that the grid cells have an integer width.
         }
         TextField
         {
@@ -97,9 +108,12 @@ Item
                 var modified_text = text.replace(",", ".") // User convenience. We use dots for decimal values
                 UM.ActiveTool.setProperty("X", modified_text);
             }
+            Keys.onBacktabPressed: selectTextInTextfield(zTextField)
+            Keys.onTabPressed: selectTextInTextfield(yTextField)
         }
         TextField
         {
+            id: yTextField
             width: UM.Theme.getSize("setting_control").width;
             height: UM.Theme.getSize("setting_control").height;
             property string unit: "mm";
@@ -116,9 +130,12 @@ Item
                 var modified_text = text.replace(",", ".") // User convenience. We use dots for decimal values
                 UM.ActiveTool.setProperty("Y", modified_text);
             }
+            Keys.onBacktabPressed: selectTextInTextfield(xTextField)
+            Keys.onTabPressed: selectTextInTextfield(zTextField)
         }
         TextField
         {
+            id: zTextField
             width: UM.Theme.getSize("setting_control").width;
             height: UM.Theme.getSize("setting_control").height;
             property string unit: "mm";
@@ -134,6 +151,8 @@ Item
                 var modified_text = text.replace(",", ".") // User convenience. We use dots for decimal values
                 UM.ActiveTool.setProperty("Z", modified_text);
             }
+            Keys.onBacktabPressed: selectTextInTextfield(yTextField)
+            Keys.onTabPressed: selectTextInTextfield(xTextField)
         }
     }
 

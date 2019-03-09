@@ -10,8 +10,10 @@ Uranium is released under the terms of the LGPLv3 or higher. A copy of this lice
 
 Dependencies
 ------------
-- Python 3
 - Qt 5 with QtQuick 2, QtQuick Controls
-- PyQt5
-- Numpy
-- Arcus
+- Python 3, with the following modules
+  - PyQt5
+  - Numpy
+  - Arcus
+  - Shapely
+  - Scipy

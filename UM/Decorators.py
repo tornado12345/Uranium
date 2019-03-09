@@ -1,4 +1,4 @@
-# Copyright (c) 2016 Ultimaker B.V.
+# Copyright (c) 2018 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 
 import copy
@@ -6,7 +6,7 @@ import warnings
 import inspect
 
 from UM.Logger import Logger
-
+import time
 
 ##  Decorator that can be used to indicate a method has been deprecated
 #
@@ -83,13 +83,14 @@ def interface(cls):
     # Then, replace the new method with a method that checks if all methods have been reimplemented
     old_new = cls.__new__
     def new_new(subclass, *args, **kwargs):
-        for method in filter(lambda i: inspect.isfunction(i[1]) and not i[1].__name__.startswith("__") and not i[0].startswith("__"), inspect.getmembers(cls)):
-            sub_method = getattr(subclass, method[0])
-            if sub_method == method[1]:
-                raise NotImplementedError("Class {0} does not implement the complete interface of {1}: Missing method {2}".format(subclass, cls, method[0]))
+        if cls != subclass:
+            for method in filter(lambda i: inspect.isfunction(i[1]) and not i[1].__name__.startswith("__") and not i[0].startswith("__"), inspect.getmembers(cls)):
+                sub_method = getattr(subclass, method[0])
+                if sub_method == method[1]:
+                    raise NotImplementedError("Class {0} does not implement the complete interface of {1}: Missing method {2}".format(subclass, cls, method[0]))
 
-            if not sameSignature(inspect.signature(sub_method), inspect.signature(method[1])):
-                raise NotImplementedError("Method {0} of class {1} does not have the same signature as method {2} in interface {3}: {4} vs {5}".format(sub_method, subclass, method[1], cls, inspect.signature(sub_method), inspect.signature(method[1])))
+                if not sameSignature(inspect.signature(sub_method), inspect.signature(method[1])):
+                    raise NotImplementedError("Method {0} of class {1} does not have the same signature as method {2} in interface {3}: {4} vs {5}".format(sub_method, subclass, method[1], cls, inspect.signature(sub_method), inspect.signature(method[1])))
 
         if old_new == object.__new__:
             return object.__new__(subclass) # Because object.__new__() complains if we pass it *args and **kwargs
@@ -108,3 +109,19 @@ def immutable(cls):
 
 def sameSignature(a: inspect.Signature, b: inspect.Signature) -> bool:
     return len(a.parameters) == len(b.parameters)
+
+
+def timeit(method):
+    def timed(*args, **kw):
+        ts = time.time()
+        result = method(*args, **kw)
+        te = time.time()
+
+        if "log_time" in kw:
+            name = kw.get("log_name", method.__name__.upper())
+            kw["log_time"][name] = int((te - ts) * 1000)
+        else:
+            print("Function %r took %2.2f ms" % (method.__name__, (te - ts) * 1000))
+        return result
+
+    return timed

@@ -1,6 +1,7 @@
 # Copyright (c) 2015 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
-from UM.Benchmark import Benchmark
+from typing import List, Tuple, TYPE_CHECKING, Optional
+
 from UM.Tool import Tool
 from UM.Event import Event, MouseEvent, KeyEvent
 from UM.Scene.ToolHandle import ToolHandle
@@ -13,17 +14,18 @@ from UM.Math.Matrix import Matrix
 from UM.Operations.ScaleOperation import ScaleOperation
 from UM.Operations.GroupedOperation import GroupedOperation
 from UM.Operations.SetTransformOperation import SetTransformOperation
-from UM.Operations.ScaleToBoundsOperation import ScaleToBoundsOperation
 
 from PyQt5.QtCore import Qt
 from . import ScaleToolHandle
 
 import scipy
+if TYPE_CHECKING:
+    from UM.Scene.SceneNode import SceneNode
 
 DIMENSION_TOLERANCE = 0.0001    # Tolerance value used for comparing dimensions from the UI.
 
-##  Provides the tool to scale meshes and groups
 
+##  Provides the tool to scale meshes and groups
 class ScaleTool(Tool):
     def __init__(self):
         super().__init__()
@@ -35,18 +37,17 @@ class ScaleTool(Tool):
 
         self._drag_length = 0
 
-        self._maximum_bounds = None
         self._move_up = True
 
-        self._shortcut_key = Qt.Key_A
+        self._shortcut_key = Qt.Key_S
 
         # We use the position of the scale handle when the operation starts.
         # This is done in order to prevent runaway reactions (drag changes of 100+)
         self._saved_handle_position = None  # for non uniform drag
         self._scale_sum = 0.0  # a memory for uniform drag with snap scaling
-        self._last_event = None  # for uniform drag
+        self._last_event = None  # type: Optional[Event] # for uniform drag
 
-        self._saved_node_positions = []
+        self._saved_node_positions = []  # type: List[Tuple[SceneNode, Vector]]
 
         self.setExposedProperties(
             "ScaleSnap",
@@ -76,19 +77,17 @@ class ScaleTool(Tool):
         # Handle modifier keys: Shift toggles snap, Control toggles uniform scaling
         if event.type == Event.KeyPressEvent:
             if event.key == KeyEvent.ShiftKey:
-                self._snap_scale = False
-                self.propertyChanged.emit()
+                self.setScaleSnap(not self._snap_scale)
+
             elif event.key == KeyEvent.ControlKey:
-                self._non_uniform_scale = True
-                self.propertyChanged.emit()
+                self.setNonUniformScale(not self._non_uniform_scale)
 
         if event.type == Event.KeyReleaseEvent:
             if event.key == KeyEvent.ShiftKey:
-                self._snap_scale = True
-                self.propertyChanged.emit()
+                self.setScaleSnap(not self._snap_scale)
+
             elif event.key == KeyEvent.ControlKey:
-                self._non_uniform_scale = False
-                self.propertyChanged.emit()
+                self.setNonUniformScale(not self._non_uniform_scale)
 
         if event.type == Event.MousePressEvent and self._controller.getToolsEnabled():
             # Initialise a scale operation
@@ -121,6 +120,7 @@ class ScaleTool(Tool):
                 self.setDragPlane(Plane(Vector(0, 1, 0), self._saved_handle_position.y))
 
             self.setDragStart(event.x, event.y)
+            return True
 
         if event.type == Event.MouseMoveEvent:
             # Perform a scale operation
@@ -181,7 +181,7 @@ class ScaleTool(Tool):
             # Finish a scale operation
             if self.getDragPlane():
                 self.setDragPlane(None)
-                self.setLockedAxis(None)
+                self.setLockedAxis(ToolHandle.NoAxis)
                 self._drag_length = 0
                 self.operationStopped.emit(self)
                 return True
@@ -189,11 +189,6 @@ class ScaleTool(Tool):
     ##  Reset scale of the selected objects
     def resetScale(self):
         Selection.applyOperation(SetTransformOperation, None, None, Vector(1.0, 1.0, 1.0), Vector(0, 0, 0))
-
-    ##  Initialise and start a ScaleToBoundsOperation on the selected objects
-    def scaleToMax(self):
-        if hasattr(self.getController().getScene(), "_maximum_bounds"):
-            Selection.applyOperation(ScaleToBoundsOperation, self.getController().getScene()._maximum_bounds)
 
     ##  Get non-uniform scaling flag
     #

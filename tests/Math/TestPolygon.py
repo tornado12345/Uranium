@@ -8,7 +8,7 @@ import numpy
 import math
 import pytest
 
-pytestmark = pytest.mark.skip(reason = "Incomplete tests")
+#pytestmark = pytest.mark.skip(reason = "Incomplete tests")
 
 class TestPolygon:
     def setup_method(self, method):
@@ -25,7 +25,6 @@ class TestPolygon:
         ({ "points": [[0.0, 0.0], [2.0, 0.0], [1.0, 2.0]], "axis_point": [0, 0], "axis_direction": [1, 0], "answer": [[1.0, -2.0], [2.0, 0.0], [0.0, 0.0]], "label": "Mirror Vertical", "description": "Test mirroring a polygon vertically." }),
         ({ "points": [[0.0, 0.0], [2.0, 0.0], [1.0, 2.0]], "axis_point": [10, 0], "axis_direction": [0, 1], "answer": [[19.0, 2.0], [18.0, 0.0], [20.0, 0.0]], "label": "Mirror Horizontal Far", "description": "Test mirrorring a polygon horizontally on an axis that is not through the origin." }),
         ({ "points": [[0.0, 0.0], [2.0, 0.0], [1.0, 2.0]], "axis_point": [0, 4], "axis_direction": [1, 1], "answer": [[-2.0, 5.0], [-4.0, 6.0], [-4.0, 4.0]], "label": "Mirror Diagonal", "description": "Test mirroring a polygon diagonally." }),
-        ({ "points": [[10.0, 0.0]], "axis_point": [0, 0], "axis_direction": [0, 1], "answer": [[-10.0, 0.0]], "label": "Mirror Single Vertex", "description": "Test mirroring a polygon with only one vertex." }),
         ({ "points": [], "axis_point": [0, 0], "axis_direction": [1, 0], "answer": [], "label": "Mirror Empty", "description": "Test mirroring an empty polygon." })
     ]
 
@@ -37,8 +36,8 @@ class TestPolygon:
     @pytest.mark.parametrize("data", test_mirror_data)
     def test_mirror(self, data):
         polygon = Polygon(numpy.array(data["points"], numpy.float32)) #Create a polygon with the specified points.
-        polygon.mirror(data["axis_point"], data["axis_direction"]) #Mirror over the specified axis.
-        points = polygon.getPoints()
+        mirrored_poly = polygon.mirror(data["axis_point"], data["axis_direction"]) #Mirror over the specified axis.
+        points = mirrored_poly.getPoints()
         assert len(points) == len(data["points"]) #Must have the same amount of vertices.
         for point_index in range(len(points)):
             assert len(points[point_index]) == len(data["answer"][point_index]) #Same dimensionality (2).
@@ -64,8 +63,8 @@ class TestPolygon:
             [1.0, 2.0],
             [0.0, 2.0]
         ], numpy.float32))
-        result = p.project(data["normal"]) #Project the polygon onto the specified normal vector.
-        assert len(result) == len(data["answer"]) #Same dimensionality (2).
+        result = p.project(data["normal"])  # Project the polygon onto the specified normal vector.
+        assert len(result) == len(data["answer"])  # Same dimensionality (2).
         for dimension in range(len(result)):
             assert Float.fuzzyCompare(result[dimension], data["answer"][dimension])
 
@@ -87,27 +86,28 @@ class TestPolygon:
     #   \param data The data of the test. Must include a polygon to intersect
     #   with and a required answer.
     @pytest.mark.parametrize("data", test_intersect_data)
+    @pytest.mark.skip(reason = "Incomplete tests")
     def test_intersectsPolygon(self, data):
-        p1 = Polygon(numpy.array([ #The base polygon to intersect with.
+        p1 = Polygon(numpy.array([  # The base polygon to intersect with.
             [ 0,  0],
             [10,  0],
             [10, 10],
             [ 0, 10]
         ], numpy.float32))
-        p2 = Polygon(numpy.array(data["polygon"])) #The parametrised polygon to intersect with.
+        p2 = Polygon(numpy.array(data["polygon"]))  # The parametrised polygon to intersect with.
 
-        #Shift the order of vertices in both polygons around. The outcome should be independent of what the first vertex is.
+        # Shift the order of vertices in both polygons around. The outcome should be independent of what the first vertex is.
         for n in range(0, len(p1.getPoints())):
             for m in range(0, len(data["polygon"])):
                 result = p1.intersectsPolygon(p2)
-                if not data["answer"]: #Result should be None.
-                    assert result == None
+                if not data["answer"]:  # Result should be None.
+                    assert result is None
                 else:
-                    assert result != None
+                    assert result is not None
                     for i in range(0, len(data["answer"])):
                         assert Float.fuzzyCompare(result[i], data["answer"][i])
-                p2.setPoints(numpy.roll(p2.getPoints(), 1, axis = 0)) #Shift p2.
-            p1.setPoints(numpy.roll(p1.getPoints(), 1, axis = 0)) #Shift p1.
+                p2 = Polygon(numpy.roll(p2.getPoints(), 1, axis = 0)) #Shift p2.
+            p1 = Polygon(numpy.roll(p1.getPoints(), 1, axis = 0)) #Shift p1.
 
     ##  The individual test cases for convex hull intersection tests.
     test_intersectConvex_data = [
@@ -119,23 +119,56 @@ class TestPolygon:
     #   \param data The data of the test case. Must include two polygons and a
     #   required result polygon.
     @pytest.mark.parametrize("data", test_intersectConvex_data)
-    def test_intersectConvexHull(self, data):
+    def test_intersectConvexHull(self, data) -> None:
         p1 = Polygon(numpy.array(data["p1"]))
         p2 = Polygon(numpy.array(data["p2"]))
         result = p1.intersectionConvexHulls(p2)
-        assert len(result.getPoints()) == len(data["answer"]) #Same amount of vertices.
+        assert len(result.getPoints()) == len(data["answer"])  # Same amount of vertices.
         isCorrect = False
-        for rotation in range(0, len(result.getPoints())): #The order of vertices doesn't matter, so rotate the result around and if any check succeeds, the answer is correct.
-            thisCorrect = True #Is this rotation correct?
+        for rotation in range(0, len(result.getPoints())):  # The order of vertices doesn't matter, so rotate the result around and if any check succeeds, the answer is correct.
+            thisCorrect = True  # Is this rotation correct?
             for vertex in range(0, len(result.getPoints())):
                 for dimension in range(0, len(result.getPoints()[vertex])):
                     if not Float.fuzzyCompare(result.getPoints()[vertex][dimension], data["answer"][vertex][dimension]):
                         thisCorrect = False
-                        break #Break out of two loops.
+                        break  # Break out of two loops.
                 if not thisCorrect:
                     break
-            if thisCorrect: #All vertices checked and it's still correct.
+            if thisCorrect:  # All vertices checked and it's still correct.
                 isCorrect = True
                 break
-            result.setPoints(numpy.roll(result.getPoints(), 1, axis = 0)) #Perform the rotation for the next check.
+            result = Polygon(numpy.roll(result.getPoints(), 1, axis = 0)) #Perform the rotation for the next check.
+        assert isCorrect
+
+    ##  The individual test cases for convex hull union tests.
+    test_unionConvex_data = [
+        ({"p1": [[1, 1], [1.5, 1], [2, 2], [2, 0]], "p2": [[3, 2], [3.5, 1], [4, 1], [3, 0]], "answer": [[1, 1], [2, 2], [3, 2], [4, 1], [3, 0], [2, 0]], "label": "ConvexHull Union Separate", "description": "Two disparate shapes."}),
+        ({"p1": [[1, 1], [3, 3], [3, -1]], "p2": [[2, 1], [4, 2], [4, 0]], "answer": [[1, 1], [3, 3], [4, 2], [4, 0], [3, -1]], "label": "ConvexHull Union Inside", "description": "One triangle partially inside the other."}),
+        ({"p1": [[1, 1], [5, 5], [5, -4]], "p2": [[2, 1], [3, 2], [3, 1]], "answer": [[1, 1], [5, 5], [5, -4]], "label": "ConvexHull Union Enclosed", "description": "One triangle completely inside the other."}),
+        ({"p1": [[1, 1], [2, 2], [2, 0]], "p2": [], "answer": [[1, 1], [2, 2], [2, 0]], "label": "ConvexHull Union Single", "description": "One triangle."})
+    ]
+
+    ##  Tests the convex hull of convex hulls
+    #
+    #   \param data The data of the test case.
+    @pytest.mark.parametrize("data", test_unionConvex_data)
+    def test_unionConvexHull(self, data) -> None:
+        p1 = Polygon(numpy.array(data["p1"]))
+        p2 = Polygon(numpy.array(data["p2"]))
+        result = p1.unionConvexHulls(p2)
+        assert len(result.getPoints()) == len(data["answer"])  # Same amount of vertices.
+        isCorrect = False
+        for rotation in range(0, len(result.getPoints())):  # The order of vertices doesn't matter, so rotate the result around and if any check succeeds, the answer is correct.
+            thisCorrect = True  # Is this rotation correct?
+            for vertex in range(0, len(result.getPoints())):
+                for dimension in range(0, len(result.getPoints()[vertex])):
+                    if not Float.fuzzyCompare(result.getPoints()[vertex][dimension], data["answer"][vertex][dimension]):
+                        thisCorrect = False
+                        break  # Break out of two loops.
+                if not thisCorrect:
+                    break
+            if thisCorrect:  # All vertices checked and it's still correct.
+                isCorrect = True
+                break
+            result = Polygon(numpy.roll(result.getPoints(), 1, axis = 0)) #Perform the rotation for the next check.
         assert isCorrect

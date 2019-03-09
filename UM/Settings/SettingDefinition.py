@@ -77,14 +77,14 @@ class SettingDefinition:
     #   \param container \type{DefinitionContainerInterface} The container of this setting. Defaults to None.
     #   \param parent \type{SettingDefinition} The parent of this setting. Defaults to None.
     #   \param i18n_catalog \type{i18nCatalog} The translation catalog to use for this setting. Defaults to None.
-    def __init__(self, key: str, container: Optional[DefinitionContainerInterface] = None, parent: Optional["SettingDefinition"] = None, i18n_catalog: i18nCatalog = None) -> None:
+    def __init__(self, key: str, container: Optional[DefinitionContainerInterface] = None, parent: Optional["SettingDefinition"] = None, i18n_catalog: Optional[i18nCatalog] = None) -> None:
         super().__init__()
-
+        self._all_keys = set()  # type: Set[str]
         self._key = key  # type: str
         self._container = container # type: Optional[DefinitionContainerInterface]
         self._parent = parent   # type:  Optional["SettingDefinition"]
 
-        self._i18n_catalog = i18n_catalog  # type: i18nCatalog
+        self._i18n_catalog = i18n_catalog  # type: Optional[i18nCatalog]
 
         self._children = []     # type: List[SettingDefinition]
         self._relations = []    # type: List[SettingRelation]
@@ -127,6 +127,11 @@ class SettingDefinition:
     #   behaviour doesn't combine well with a non-default __getattr__.
     def __setstate__(self, state):
         self.__dict__.update(state)
+        # For 4.0 we added the _all_keys property, but the pickling fails to restore this.
+        # This is just there to prevent issues for developers, since only releases ignore caches.
+        # If you're reading this after that. Remove this.
+        if not hasattr(self, "_all_keys"):
+            self._all_keys = set()
 
     ##  The key of this setting.
     #
@@ -173,17 +178,19 @@ class SettingDefinition:
     #
     #   \return A set of the key in this definition and all its descendants.
     def getAllKeys(self) -> Set[str]:
-        keys = set()
-        keys.add(self.key)
-        for child in self.children:
-            keys |= child.getAllKeys() #Recursively get all keys of all descendants.
-        return keys
+        if not self._all_keys:
+            # It was reset, re-calculate them
+            self._all_keys = set()
+            self._all_keys.add(self.key)
+            for child in self.children:
+                self._all_keys |= child.getAllKeys()  # Recursively get all keys of all descendants.
+        return self._all_keys
 
     ##  Serialize this setting to a dict.
     #
     #   \return \type{dict} A representation of this setting definition.
     def serialize_to_dict(self) -> Dict[str, Any]:
-        result = {}     # type: Dict[str, Any]
+        result = {}  # type: Dict[str, Any]
         result["label"] = self.key
 
         result["children"] = {}
@@ -460,7 +467,7 @@ class SettingDefinition:
     #
     #   \return \type{string} The property it depends on or None if it does not depend on another property.
     @classmethod
-    def dependsOnProperty(cls, name: str) -> str:
+    def dependsOnProperty(cls, name: str) -> Optional[str]:
         if name in cls.__property_definitions:
             return cls.__property_definitions[name]["depends_on"]
         return None
@@ -472,7 +479,8 @@ class SettingDefinition:
     #   \param to_string A function that converts a value of this type to a string.
     #
     @classmethod
-    def addSettingType(cls, type_name: str, from_string: Callable[[str], Any], to_string: Callable[[Any],str], validator: Validator = None) -> None:
+    def addSettingType(cls, type_name: str, from_string: Optional[Callable[[str], Any]],
+                       to_string: Callable[[Any], str], validator: Optional[Validator] = None) -> None:
         cls.__type_definitions[type_name] = { "from": from_string, "to": to_string, "validator": validator }
 
     ##  Convert a string to a value according to a setting type.
@@ -574,7 +582,7 @@ class SettingDefinition:
 
     def _updateDescendants(self, definition: "SettingDefinition" = None) -> Dict[str, "SettingDefinition"]:
         result = {}
-
+        self._all_keys = set()  # Reset the keys cache.
         if not definition:
             definition = self
 

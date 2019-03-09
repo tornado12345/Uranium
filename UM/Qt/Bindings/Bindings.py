@@ -22,7 +22,6 @@ from . import Theme
 from . import OpenGLContextProxy
 from . import PointingRectangle
 from . import ActiveToolProxy
-from . import ActiveViewProxy
 from . import OutputDevicesModel
 from . import SelectionProxy
 from . import OutputDeviceManagerProxy
@@ -92,7 +91,6 @@ class Bindings:
         qmlRegisterSingletonType(PreferencesProxy.PreferencesProxy, "UM", 1, 0, "Preferences", PreferencesProxy.createPreferencesProxy)
         qmlRegisterSingletonType(Theme.Theme, "UM", 1, 0, "Theme", Theme.createTheme)
         qmlRegisterSingletonType(ActiveToolProxy.ActiveToolProxy, "UM", 1, 0, "ActiveTool", ActiveToolProxy.createActiveToolProxy)
-        qmlRegisterSingletonType(ActiveViewProxy.ActiveViewProxy, "UM", 1, 0, "ActiveView", ActiveViewProxy.createActiveViewProxy)
         qmlRegisterSingletonType(SelectionProxy.SelectionProxy, "UM", 1, 0, "Selection", SelectionProxy.createSelectionProxy)
 
         qmlRegisterUncreatableType(Duration, "UM", 1, 0, "Duration", "")
@@ -120,3 +118,7 @@ class Bindings:
 
         # Additions after 3.1
         qmlRegisterType(StageModel.StageModel, "UM", 1, 4, "StageModel")
+
+    @staticmethod
+    def addRegisterType(class_type: type, qml_import_name: str, major_version: int, minor_version: int, class_name: str) -> None:
+        qmlRegisterType(class_type, qml_import_name, major_version, minor_version, class_name)

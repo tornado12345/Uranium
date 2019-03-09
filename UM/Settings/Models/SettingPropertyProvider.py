@@ -1,5 +1,6 @@
 # Copyright (c) 2017 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
+from typing import Optional, List, Set, Any
 
 from PyQt5.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
 from PyQt5.QtQml import QQmlPropertyMap
@@ -7,14 +8,17 @@ from UM.FlameProfiler import pyqtSlot
 
 from UM.Logger import Logger
 from UM.Application import Application
+from UM.Settings.ContainerStack import ContainerStack
 from UM.Settings.SettingFunction import SettingFunction
 from UM.Settings.ContainerRegistry import ContainerRegistry
 from UM.Settings.DefinitionContainer import DefinitionContainer
 from UM.Settings.InstanceContainer import InstanceContainer
-from UM.Settings.Interfaces import PropertyEvaluationContext
+from UM.Settings.Interfaces import PropertyEvaluationContext, ContainerInterface
 from UM.Settings.SettingInstance import InstanceState
 from UM.Settings.SettingRelation import RelationType
 from UM.Settings.SettingDefinition import SettingDefinition
+from UM.Settings.Validator import Validator
+
 
 ##  This class provides the value and change notifications for the properties of a single setting
 #
@@ -24,21 +28,20 @@ from UM.Settings.SettingDefinition import SettingDefinition
 #   This class provides the property values through QObject dynamic properties so that they
 #   are available from QML.
 class SettingPropertyProvider(QObject):
-    def __init__(self, parent = None, *args, **kwargs):
-        super().__init__(parent = parent, *args, **kwargs)
+    def __init__(self, parent = None) -> None:
+        super().__init__(parent = parent)
 
         self._property_map = QQmlPropertyMap(self)
 
-        self._stack_id = ""
-        self._stack = None
+        self._stack = None  # type: Optional[ContainerStack]
         self._key = ""
-        self._relations = set()
-        self._watched_properties = []
+        self._relations = set()  # type: Set[str]
+        self._watched_properties = []  # type: List[str]
         self._store_index = 0
-        self._value_used = None
-        self._stack_levels = []
+        self._value_used = None  # type: Optional[bool]
+        self._stack_levels = []  # type: List[int]
         self._remove_unused_value = True
-        self._validator = None
+        self._validator = None  # type: Optional[Validator]
 
         self._update_timer = QTimer()
         self._update_timer.setInterval(100)
@@ -47,55 +50,69 @@ class SettingPropertyProvider(QObject):
 
         self.storeIndexChanged.connect(self._storeIndexChanged)
 
-    ##  Set the containerStackId property.
-    def setContainerStackId(self, stack_id):
-        if stack_id == self._stack_id:
-            return # No change.
-
-        self._stack_id = stack_id
+    def setContainerStack(self, stack: Optional[ContainerStack]) -> None:
+        if self._stack == stack:
+            return  # Nothing to do, attempting to set stack to the same value.
 
         if self._stack:
             self._stack.propertiesChanged.disconnect(self._onPropertiesChanged)
             self._stack.containersChanged.disconnect(self._containersChanged)
 
-        if self._stack_id:
-            if self._stack_id == "global":
-                self._stack = Application.getInstance().getGlobalContainerStack()
-            else:
-                stacks = ContainerRegistry.getInstance().findContainerStacks(id = self._stack_id)
-                if stacks:
-                    self._stack = stacks[0]
+        self._stack = stack
 
-            if self._stack:
-                self._stack.propertiesChanged.connect(self._onPropertiesChanged)
-                self._stack.containersChanged.connect(self._containersChanged)
-        else:
-            self._stack = None
+        if self._stack:
+            self._stack.propertiesChanged.connect(self._onPropertiesChanged)
+            self._stack.containersChanged.connect(self._containersChanged)
 
         self._validator = None
         self._update()
-        self.containerStackIdChanged.emit()
+        self.containerStackChanged.emit()
+
+    ##  Set the containerStackId property.
+    def setContainerStackId(self, stack_id: str) -> None:
+        if stack_id == self.containerStackId:
+            return  # No change.
+
+        if stack_id:
+            if stack_id == "global":
+                self.setContainerStack(Application.getInstance().getGlobalContainerStack())
+            else:
+                stacks = ContainerRegistry.getInstance().findContainerStacks(id = stack_id)
+                if stacks:
+                    self.setContainerStack(stacks[0])
+        else:
+            self.setContainerStack(None)
 
     ##  Emitted when the containerStackId property changes.
     containerStackIdChanged = pyqtSignal()
+
     ##  The ID of the container stack we should query for property values.
     @pyqtProperty(str, fset = setContainerStackId, notify = containerStackIdChanged)
-    def containerStackId(self):
-        return self._stack_id
+    def containerStackId(self) -> str:
+        if self._stack:
+            return self._stack.id
+
+        return ""
+
+    containerStackChanged = pyqtSignal()
+
+    @pyqtProperty(QObject, fset=setContainerStack, notify=containerStackChanged)
+    def containerStack(self) -> Optional[ContainerInterface]:
+        return self._stack
 
     removeUnusedValueChanged = pyqtSignal()
 
-    def setRemoveUnusedValue(self, remove_unused_value):
+    def setRemoveUnusedValue(self, remove_unused_value: bool) -> None:
         if self._remove_unused_value != remove_unused_value:
             self._remove_unused_value = remove_unused_value
             self.removeUnusedValueChanged.emit()
 
     @pyqtProperty(bool, fset = setRemoveUnusedValue, notify = removeUnusedValueChanged)
-    def removeUnusedValue(self):
+    def removeUnusedValue(self) -> bool:
         return self._remove_unused_value
 
     ##  Set the watchedProperties property.
-    def setWatchedProperties(self, properties):
+    def setWatchedProperties(self, properties: List[str]) -> None:
         if properties != self._watched_properties:
             self._watched_properties = properties
             self._update()
@@ -104,12 +121,12 @@ class SettingPropertyProvider(QObject):
     ##  Emitted when the watchedProperties property changes.
     watchedPropertiesChanged = pyqtSignal()
     ##  A list of property names that should be watched for changes.
-    @pyqtProperty("QVariantList", fset = setWatchedProperties, notify = watchedPropertiesChanged)
-    def watchedProperties(self):
+    @pyqtProperty("QStringList", fset = setWatchedProperties, notify = watchedPropertiesChanged)
+    def watchedProperties(self) -> List[str]:
         return self._watched_properties
 
     ##  Set the key property.
-    def setKey(self, key):
+    def setKey(self, key: str) -> None:
         if key != self._key:
             self._key = key
             self._validator = None
@@ -206,7 +223,7 @@ class SettingPropertyProvider(QObject):
     #   \param property_name The name of the property to get the value from.
     #   \param stack_level the index of the container to get the value from.
     @pyqtSlot(str, int, result = "QVariant")
-    def getPropertyValue(self, property_name, stack_level):
+    def getPropertyValue(self, property_name: str, stack_level: int) -> Any:
         try:
             # Because we continue to count if there are multiple linked stacks, we need to check what stack is targeted
             current_stack = self._stack
@@ -214,7 +231,7 @@ class SettingPropertyProvider(QObject):
                 num_containers = len(current_stack.getContainers())
                 if stack_level >= num_containers:
                     stack_level -= num_containers
-                    current_stack = self._stack.getNextStack()
+                    current_stack = current_stack.getNextStack()
                 else:
                     break  # Found the right stack
 
@@ -229,13 +246,13 @@ class SettingPropertyProvider(QObject):
         return value
 
     @pyqtSlot(int)
-    def removeFromContainer(self, index):
+    def removeFromContainer(self, index: int) -> None:
         current_stack = self._stack
         while current_stack:
             num_containers = len(current_stack.getContainers())
             if index >= num_containers:
                 index -= num_containers
-                current_stack = self._stack.getNextStack()
+                current_stack = current_stack.getNextStack()
             else:
                 break  # Found the right stack
 
@@ -252,7 +269,7 @@ class SettingPropertyProvider(QObject):
 
     isValueUsedChanged = pyqtSignal()
     @pyqtProperty(bool, notify = isValueUsedChanged)
-    def isValueUsed(self):
+    def isValueUsed(self) -> bool:
         if self._value_used is not None:
             return self._value_used
         if not self._stack:
@@ -272,17 +289,17 @@ class SettingPropertyProvider(QObject):
 
             if self._stack.getProperty(key, "state") != InstanceState.User:
                 value_used_count += 1
+                break
 
             # If the setting has a formula the value is still used.
             if isinstance(self._stack.getRawProperty(key, "value"), SettingFunction):
                 value_used_count += 1
+                break
 
         self._value_used = relation_count == 0 or (relation_count > 0 and value_used_count != 0)
         return self._value_used
 
-    # protected:
-
-    def _onPropertiesChanged(self, key, property_names):
+    def _onPropertiesChanged(self, key: str, property_names: List[str]) -> None:
         if key != self._key:
             if key in self._relations:
                 self._value_used = None
@@ -295,6 +312,7 @@ class SettingPropertyProvider(QObject):
                 continue
 
             has_values_changed = True
+
             self._property_map.insert(property_name, self._getPropertyValue(property_name))
 
         self._updateStackLevels()
@@ -329,7 +347,7 @@ class SettingPropertyProvider(QObject):
 
     ##  Updates the self._stack_levels field, which indicates at which levels in
     #   the stack the property is set.
-    def _updateStackLevels(self):
+    def _updateStackLevels(self) -> None:
         levels = []
         # Start looking at the stack this provider is attached to.
         current_stack = self._stack

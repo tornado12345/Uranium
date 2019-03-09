@@ -10,9 +10,11 @@ from UM.JobQueue import JobQueue
 import time
 import threading
 
+
 class ShortTestJob(Job):
     def run(self):
         self.setResult("TestJob")
+
 
 class LongTestJob(Job):
     def run(self):
@@ -21,18 +23,19 @@ class LongTestJob(Job):
 
 @pytest.fixture
 def job_queue():
-    JobQueue._instance = None
+    JobQueue._JobQueue__instance = None
     return JobQueue()
 
-class TestJobQueue():
+
+class TestJobQueue:
     def test_create(self):
-        JobQueue._instance = None
+        JobQueue._JobQueue__instance = None
         jq = JobQueue()
 
         assert len(jq._threads) > 0
         assert jq == JobQueue.getInstance()
 
-        JobQueue._instance = None
+        JobQueue._JobQueue__instance = None
 
         jq = JobQueue(4)
         assert len(jq._threads) == 4
@@ -85,6 +88,3 @@ class TestJobQueue():
 
     def test_remove(self):
         pass
-
-if __name__ == "__main__":
-    unittest.main()

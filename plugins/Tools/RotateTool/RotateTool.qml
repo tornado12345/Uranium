@@ -10,7 +10,7 @@ Item
 {
     width: childrenRect.width
     height: childrenRect.height
-    UM.I18nCatalog { id: catalog; name:"uranium"}
+    UM.I18nCatalog { id: catalog; name: "uranium"}
     Button
     {
         id: resetRotationButton
@@ -47,6 +47,7 @@ Item
 
     CheckBox
     {
+        id: snapRotationCheckbox
         anchors.left: parent.left;
         anchors.top: resetRotationButton.bottom;
         anchors.topMargin: UM.Theme.getSize("default_margin").width;
@@ -58,5 +59,12 @@ Item
 
         checked: UM.ActiveTool.properties.getValue("RotationSnap");
         onClicked: UM.ActiveTool.setProperty("RotationSnap", checked);
+    }
+
+    Binding
+    {
+        target: snapRotationCheckbox
+        property: "checked"
+        value: UM.ActiveTool.properties.getValue("RotationSnap")
     }
 }

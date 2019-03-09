@@ -4,7 +4,7 @@
 import os  # For getting the IDs from a filename.
 import pickle  # For caching definitions.
 import re  # To detect back-up files in the ".../old/#/..." folders.
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Optional, Set, Type
 import urllib.parse  # For interpreting escape characters using unquote_plus.
 
 from UM.Application import Application  # To get the current version for finding the cache directory.
@@ -31,10 +31,13 @@ class LocalContainerProvider(ContainerProvider):
     def __init__(self):
         super().__init__()
 
-        self._application = Application.getInstance()
-
         self._id_to_path = {}  # type: Dict[str, str] #Translates container IDs to the path to where the file is located
         self._id_to_mime = {}  # type: Dict[str, MimeType] #Translates container IDs to their MIME type.
+
+        self._is_read_only_cache = {}  # type: Dict[str, bool]
+
+    def getContainerFilePathById(self, container_id: str) -> Optional[str]:
+        return self._id_to_path.get(container_id)
 
     ##  Gets the IDs of all local containers.
     #
@@ -51,6 +54,8 @@ class LocalContainerProvider(ContainerProvider):
         if not base_id:
             raise Exception("The file where container {container_id} supposedly comes from is not a container file.".format(container_id = container_id))
 
+        container = None  # type: Optional[ContainerInterface]
+
         Logger.log("d", "Loading container {container_id}".format(container_id = base_id))
         container_class = ContainerRegistry.mime_type_map[self._id_to_mime[base_id].name]
         if issubclass(container_class, DefinitionContainer):  # We may need to load these from the definition cache.
@@ -59,12 +64,12 @@ class LocalContainerProvider(ContainerProvider):
                 return container
 
         # Not cached, so load by deserialising.
-        container = container_class(base_id, parent = self._application)    # Construct the container!
+        container = container_class(base_id)
         with open(file_path, "r", encoding = "utf-8") as f:
             container.deserialize(f.read())
         container.setPath(file_path)
 
-        if issubclass(container_class, DefinitionContainer):
+        if isinstance(container, DefinitionContainer):
             self._saveCachedDefinition(container)
 
         if base_id == container_id:
@@ -83,6 +88,9 @@ class LocalContainerProvider(ContainerProvider):
             return
 
         mime_type = ContainerRegistry.getMimeTypeForContainer(type(container))
+        if mime_type is None:
+            Logger.log("e", "Failed to get MIME type for container type [%s]", type(container))
+            return
         file_name = urllib.parse.quote_plus(container.getId()) + "." + mime_type.preferredSuffix
         container_type = container.getMetaDataEntry("type")
         resource_types = ContainerRegistry.getInstance().getResourceTypes()
@@ -93,12 +101,21 @@ class LocalContainerProvider(ContainerProvider):
             container.setPath(path)
             # Register it internally as being saved
             self._id_to_path[container.getId()] = path
-            self._id_to_mime[container.getId()] = self._pathToMime(path)
+            mime = self._pathToMime(path)
+            if mime is not None:
+                self._id_to_mime[container.getId()] = mime
+            else:
+                Logger.log("e", "Failed to find MIME type for container ID [%s] with path [%s]", container.getId(), path)
+
             base_file = container.getMetaData().get("base_file")
             if base_file:
                 for container_md in ContainerRegistry.getInstance().findContainersMetadata(base_file = base_file):
                     self._id_to_path[container_md["id"]] = path
-                    self._id_to_mime[container_md["id"]] = self._pathToMime(path)
+                    mime = self._pathToMime(path)
+                    if mime is not None:
+                        self._id_to_mime[container_md["id"]] = mime
+                    else:
+                        Logger.log("e", "Failed to find MIME type for container ID [%s] with path [%s]", container.getId(), path)
         else:
             Logger.log("w", "Dirty container [%s] is not saved because the resource type is unknown in ContainerRegistry", container_type)
 
@@ -107,7 +124,7 @@ class LocalContainerProvider(ContainerProvider):
     #   \param container_id The ID of the container to load the metadata of.
     #   \return The metadata of the specified container, or ``None`` if the
     #   metadata failed to load.
-    def loadMetadata(self, container_id: str) -> Optional[Dict[str, Any]]:
+    def loadMetadata(self, container_id: str) -> Dict[str, Any]:
         registry = ContainerRegistry.getInstance()
         if container_id in registry.metadata:
             return registry.metadata[container_id]
@@ -115,18 +132,18 @@ class LocalContainerProvider(ContainerProvider):
         filename = self._id_to_path[container_id] #Raises KeyError if container ID does not exist in the (cache of the) files!
         clazz = ContainerRegistry.mime_type_map[self._id_to_mime[container_id].name]
 
-        requested_metadata = None
+        requested_metadata = {}  # type: Dict[str, Any]
         try:
             with open(filename, "r", encoding = "utf-8") as f:
                 result_metadatas = clazz.deserializeMetadata(f.read(), container_id) #pylint: disable=no-member
         except IOError as e:
             Logger.log("e", "Unable to load metadata from file {filename}: {error_msg}".format(filename = filename, error_msg = str(e)))
             ConfigurationErrorMessage.getInstance().addFaultyContainers(container_id)
-            return None
+            return {}
         except Exception as e:
             Logger.logException("e", "Unable to deserialize metadata for container {filename}: {container_id}: {error_msg}".format(filename = filename, container_id = container_id, error_msg = str(e)))
             ConfigurationErrorMessage.getInstance().addFaultyContainers(container_id)
-            return None
+            return {}
 
         for metadata in result_metadatas:
             if "id" not in metadata:
@@ -147,8 +164,10 @@ class LocalContainerProvider(ContainerProvider):
     #   A container can only be modified if it is stored in the data directory.
     #   \return Whether the specified container is read-only.
     def isReadOnly(self, container_id: str) -> bool:
+        if container_id in self._is_read_only_cache:
+            return self._is_read_only_cache[container_id]
         storage_path = os.path.realpath(Resources.getDataStoragePath())
-        file_path = self._id_to_path[container_id] #If KeyError: We don't know this ID.
+        file_path = self._id_to_path[container_id]  # If KeyError: We don't know this ID.
 
         # The container is read-only if file_path is not a subdirectory of storage_path.
         if Platform.isWindows():
@@ -160,6 +179,7 @@ class LocalContainerProvider(ContainerProvider):
                 result = True
         else:
             result = os.path.commonpath([storage_path, os.path.realpath(file_path)]) != storage_path
+        self._is_read_only_cache[container_id] = result
         return result
 
     ##  Remove or unregister an id.
@@ -194,7 +214,7 @@ class LocalContainerProvider(ContainerProvider):
     def _loadCachedDefinition(self, definition_id) -> Optional[DefinitionContainer]:
         definition_path = self._id_to_path[definition_id]
         try:
-            cache_path = Resources.getPath(Resources.Cache, "definitions", self._application.getVersion(), definition_id)
+            cache_path = Resources.getPath(Resources.Cache, "definitions", Application.getInstance().getVersion(), definition_id)
             cache_mtime = os.path.getmtime(cache_path)
             definition_mtime = os.path.getmtime(definition_path)
         except FileNotFoundError: #Cache doesn't exist yet.
@@ -230,7 +250,7 @@ class LocalContainerProvider(ContainerProvider):
     #
     #   \param definition The definition container to store.
     def _saveCachedDefinition(self, definition: DefinitionContainer) -> None:
-        cache_path = Resources.getStoragePath(Resources.Cache, "definitions", self._application.getVersion(), definition.id)
+        cache_path = Resources.getStoragePath(Resources.Cache, "definitions", Application.getInstance().getVersion(), definition.id)
 
         # Ensure the cache path exists.
         try:
@@ -260,7 +280,7 @@ class LocalContainerProvider(ContainerProvider):
 
         old_file_expression = re.compile(r"\{sep}old\{sep}\d+\{sep}".format(sep = os.sep))  # To detect files that are back-ups. Matches on .../old/#/...
 
-        all_resources = set()
+        all_resources = set()  # type: Set[str]
         for resource_type in ContainerRegistry.getInstance().getResourceTypes().values():
             all_resources |= set(Resources.getAllResourcesOfType(resource_type))  # Remove duplicates, since the Resources only finds resources by their directories.
         for filename in all_resources:
@@ -279,7 +299,7 @@ class LocalContainerProvider(ContainerProvider):
     ##  Converts a file path to the MIME type of the container it represents.
     #
     #   \return The MIME type or None if it's not a container.
-    def _pathToMime(self, path) -> Optional[MimeType]:
+    def _pathToMime(self, path: str) -> Optional[MimeType]:
         try:
             mime = MimeTypeDatabase.getMimeTypeForFile(path)
         except MimeTypeDatabase.MimeTypeNotFoundError:
@@ -290,7 +310,9 @@ class LocalContainerProvider(ContainerProvider):
         return mime
 
     ##  Converts a file path to the ID of the container it represents.
-    def _pathToId(self, path) -> Optional[str]:
+    def _pathToId(self, path: str) -> Optional[str]:
+        result = None
         mime = self._pathToMime(path)
         if mime:
-            return urllib.parse.unquote_plus(self._pathToMime(path).stripExtension(os.path.basename(path)))
+            result = urllib.parse.unquote_plus(mime.stripExtension(os.path.basename(path)))
+        return result

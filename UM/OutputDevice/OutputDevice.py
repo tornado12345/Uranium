@@ -1,6 +1,10 @@
-# Copyright (c) 2015 Ultimaker B.V.
+# Copyright (c) 2018 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 
+from typing import List, Optional
+
+from UM.FileHandler.FileHandler import FileHandler #For typing.
+from UM.Scene.SceneNode import SceneNode #For typing.
 from UM.Signal import Signal, signalemitter
 
 
@@ -21,7 +25,7 @@ from UM.Signal import Signal, signalemitter
 #   login credentials.
 @signalemitter
 class OutputDevice():
-    def __init__(self, device_id, **kwargs):
+    def __init__(self, device_id: str, **kwargs: str) -> None:
         super().__init__()
 
         self._id = device_id
@@ -34,17 +38,17 @@ class OutputDevice():
     metaDataChanged = Signal()
 
     ##  Get the device id
-    def getId(self):
+    def getId(self) -> str:
         return self._id
 
     ##  Get a human-readable name for this device.
-    def getName(self):
+    def getName(self) -> str:
         return self._name
 
     ##  Set the human-readable name of this device.
     #
     #   \param name The new name of this device.
-    def setName(self, name):
+    def setName(self, name: str) -> None:
         if name != self._name:
             self._name = name
             self.metaDataChanged.emit(self)
@@ -54,13 +58,13 @@ class OutputDevice():
     #   The short description can be used as a button label or similar
     #   and should thus be only a few words at most. For example,
     #   "Save to File", "Print with USB".
-    def getShortDescription(self):
+    def getShortDescription(self) -> str:
         return self._short_description
 
     ##  Set the short description for this device.
     #
     #   \param description The new short description to set.
-    def setShortDescription(self, description):
+    def setShortDescription(self, description: str) -> None:
         if description != self._short_description:
             self._short_description = description
             self.metaDataChanged.emit(self)
@@ -70,13 +74,13 @@ class OutputDevice():
     #   The full description describes what would happen when writing
     #   to this device. For example, "Save to Removable Drive /media/sdcard",
     #   "Upload to YouMagine with account User".
-    def getDescription(self):
+    def getDescription(self) -> str:
         return self._description
 
     ##  Set the full description for this device.
     #
     #   \param description The description of this device.
-    def setDescription(self, description):
+    def setDescription(self, description: str) -> None:
         if description != self._description:
             self._description = description
             self.metaDataChanged.emit(self)
@@ -84,13 +88,13 @@ class OutputDevice():
     ##  Get the name of an icon that can be used to identify this device.
     #
     #   This icon should be available in the theme.
-    def getIconName(self):
+    def getIconName(self) -> str:
         return self._icon_name
 
     ##  Set the name of an icon to identify this device.
     #
     #   \param name The name of the icon to use.
-    def setIconName(self, name):
+    def setIconName(self, name: str) -> None:
         if name != self._icon_name:
             self._icon_name = name
             self.metaDataChanged.emit(self)
@@ -101,13 +105,13 @@ class OutputDevice():
     #   default device to write to. It should be a number and higher numbers
     #   indicate that the device should be preferred over devices with
     #   lower numbers.
-    def getPriority(self):
+    def getPriority(self) -> int:
         return self._priority
 
     ##  Set the priority of this device.
     #
-    #   \param priority \type{int} The priority to use.
-    def setPriority(self, priority):
+    #   \param priority The priority to use.
+    def setPriority(self, priority: int) -> None:
         if priority != self._priority:
             self._priority = priority
             self.metaDataChanged.emit(self)
@@ -121,13 +125,13 @@ class OutputDevice():
     #
     #   \param nodes A collection of scene nodes that should be written to the
     #   device.
-    #   \param file_name \type{string} A suggestion for the file name to write
+    #   \param file_name A suggestion for the file name to write
     #   to. Can be freely ignored if providing a file name makes no sense.
     #   \param limit_mimetype Limit output to these mime types.
     #   \param file_handler The filehandler to use to write the file with.
     #   \param kwargs Keyword arguments.
     #   \exception OutputDeviceError.WriteRequestFailedError
-    def requestWrite(self, nodes, file_name = None, limit_mimetypes = False, file_handler = None, **kwargs):
+    def requestWrite(self, nodes: List[SceneNode], file_name: Optional[str] = None, limit_mimetypes: bool = False, file_handler: Optional[FileHandler] = None, **kwargs: str) -> None:
         raise NotImplementedError("requestWrite needs to be implemented")
 
     writeStarted = Signal()

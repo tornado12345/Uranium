@@ -1,4 +1,4 @@
-// Copyright (c) 2015 Ultimaker B.V.
+// Copyright (c) 2018 Ultimaker B.V.
 // Uranium is released under the terms of the LGPLv3 or higher.
 
 import QtQuick 2.1
@@ -85,7 +85,8 @@ PreferencesPage
             width: base.detailsVisible ? Math.round(parent.width * 0.4) | 0 : parent.width;
             frameVisible: true;
 
-            Rectangle {
+            Rectangle
+            {
                 parent: viewport
                 anchors.fill: parent
                 color: palette.light
@@ -122,8 +123,8 @@ PreferencesPage
 
                 delegate: Rectangle
                 {
-                    width: objectListContainer.viewport.width;
-                    height: childrenRect.height;
+                    width: objectListContainer.viewport.width
+                    height: Math.round(childrenRect.height)
                     color: ListView.isCurrentItem ? palette.highlight : index % 2 ? palette.base : palette.alternateBase
 
                     Label
@@ -179,10 +180,11 @@ PreferencesPage
             onItemsChanged:
             {
                 var itemIndex = -1;
-                if (base.currentItem === null) {
+                if (base.currentItem === null)
+                {
                     return;
                 }
-                for (var i = 0; i < objectList.model.rowCount(); ++i)
+                for (var i = 0; i < objectList.model.count; ++i)
                 {
                     if (objectList.model.getItem(i).id == base.currentItem.id)
                     {

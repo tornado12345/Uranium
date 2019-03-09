@@ -10,6 +10,7 @@ po_file = sys.argv[2]
 
 #Translates English to Pirate.
 def translate(english):
+    english = english.replace("&", "") #Pirates don't take shortcuts.
     for eng, pir in pirateofdoom.pirate.items():
         matches = list(re.finditer(r"\b" + eng.lower() + r"\b", english.lower()))
         matches = [match.start(0) for match in matches]
@@ -39,7 +40,7 @@ last_id_plural = ""
 last_ctxt = ""
 last_str = ""
 state = "unknown"
-with open(pot_file) as f:
+with open(pot_file, encoding = "utf-8") as f:
     for line in f:
         if line.startswith("msgctxt"):
             state = "ctxt"
@@ -75,7 +76,7 @@ for key, _ in translations.items():
     pirate_plural = translate(english_plural)
     translations[key] = (pirate, pirate_plural)
 
-with open(po_file, "w") as f:
+with open(po_file, "w", encoding = "utf-8") as f:
     f.write("""msgid ""
 msgstr ""
 "Project-Id-Version: Pirate\\n"

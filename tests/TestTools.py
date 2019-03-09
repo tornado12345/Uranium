@@ -1,70 +1,108 @@
 # Copyright (c) 2017 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 
-from unittest.mock import MagicMock
-from UM.Application import Application
+from unittest.mock import patch
 
-from UM.Controller import Controller
+import pytest
+
+from UM.Math.Plane import Plane
+from UM.Scene.SceneNode import SceneNode
+from UM.Scene.Selection import Selection
+from UM.Scene.ToolHandle import ToolHandle
 from UM.Tool import Tool
 
 
-def test_tools():
-    mock_application = MagicMock()
-
-    Application.getInstance = MagicMock(return_type = mock_application)
-    controller = Controller(mock_application)
-
-    # Switch out the emits with a mock.
-    controller.toolsChanged.emit = MagicMock()
-    controller.activeToolChanged.emit = MagicMock()
-    controller.toolOperationStarted.emit = MagicMock()
-    controller.toolOperationStopped.emit = MagicMock()
+def test_exposedProperties():
 
     test_tool_1 = Tool()
     test_tool_1.setPluginId("test_tool_1")
 
-    test_tool_2 = Tool()
-    test_tool_2.setPluginId("test_tool_2")
-
-    controller.addTool(test_tool_1)
-    assert controller.toolsChanged.emit.call_count == 1
-
-    controller.addTool(test_tool_2)
-    assert controller.toolsChanged.emit.call_count == 2
-
-    controller.addTool(test_tool_1)
-    assert controller.toolsChanged.emit.call_count == 2
-    assert len(controller.getAllTools()) == 2
-
-    # Set if with an unknown name.
-    controller.setActiveTool("nope nope!")
-    assert controller.getActiveTool() is None
-    assert controller.activeToolChanged.emit.call_count == 0
-
-    # Set active tool by reference
-    controller.setActiveTool(test_tool_1)
-    assert controller.getActiveTool() == test_tool_1
-    assert controller.activeToolChanged.emit.call_count == 1
-
-    # Set active tool by ID, but the same as is already active.
-    controller.setActiveTool("test_tool_1")
-    assert controller.getActiveTool() == test_tool_1
-    assert controller.activeToolChanged.emit.call_count == 1
-
-    # Set active tool by ID
-    controller.setActiveTool("test_tool_2")
-    assert controller.getActiveTool() == test_tool_2
-    assert controller.activeToolChanged.emit.call_count == 2
-
-    assert controller.getTool("ZOMG") is None
-    assert controller.getTool("test_tool_1") == test_tool_1
-    assert controller.getTool("test_tool_2") == test_tool_2
+    test_tool_1.setExposedProperties("bla", "omg", "zomg")
+    assert test_tool_1.getExposedProperties() == ["bla", "omg", "zomg"]
 
 
+test_validate_data = [
+    {"attribute": "DragPlane", "value": Plane()},
+    {"attribute": "Handle", "value": None}
+]
 
 
+@pytest.mark.parametrize("data", test_validate_data)
+def test_getAndSet(data):
+    test_tool = Tool()
+    # Attempt to set the value
+    getattr(test_tool, "set" + data["attribute"])(data["value"])
+
+    # Ensure that the value got set
+    assert getattr(test_tool, "get" + data["attribute"])() == data["value"]
 
 
+def test_toolEnabledChanged():
+    test_tool_1 = Tool()
+    test_tool_1.setPluginId("test_tool_1")
+    assert test_tool_1.getEnabled()
 
+    # Fake the signal from the controller
+    test_tool_1._onToolEnabledChanged("SomeOtherTOol", True)
+    assert test_tool_1.getEnabled()
+    # Fake the signal from the controller, but this time it's a signal that should force the tool to change.
+    test_tool_1._onToolEnabledChanged("test_tool_1", False)
+    assert not test_tool_1.getEnabled()
+
+
+def test_getShortcutKey():
+    test_tool_1 = Tool()
+    # Test coverage is magic. It should be None by default.
+    assert test_tool_1.getShortcutKey() is None
+
+
+def test_getDragVector():
+    test_tool_1 = Tool()
+    test_tool_1.setPluginId("test_tool_1")
+
+    # No drag plane set
+    assert test_tool_1.getDragVector(0, 0) is None
+    test_tool_1.setDragPlane(Plane())
+    # No drag start
+    assert test_tool_1.getDragVector(0, 0) is None
+
+
+def test_getDragStart():
+    test_tool_1 = Tool()
+    # Test coverage is magic. It should be None by default.
+    assert test_tool_1.getDragStart() is None
+
+
+def test_getController():
+    test_tool_1 = Tool()
+    # Test coverage is magic. It should not be None by default, since the application provided one
+    assert test_tool_1.getController() is not None
+
+def test_setLockedAxis():
+    test_tool_1 = Tool()
+    test_tool_handle_1 = ToolHandle()
+    test_tool_handle_1._auto_scale = False
+    # Pretend like the toolhandle actually got rendered at least once
+    with patch("UM.View.GL.OpenGL.OpenGL.getInstance"):
+        test_tool_handle_1.render(None)
+
+    # Needs to start out with Nothing locked
+    assert test_tool_1.getLockedAxis() == ToolHandle.NoAxis
+
+    # Just the vanilla changing.
+    test_tool_1.setLockedAxis(ToolHandle.XAxis)
+    assert test_tool_1.getLockedAxis() == ToolHandle.XAxis
+
+    test_tool_1.setHandle(test_tool_handle_1)
+    test_tool_1.setLockedAxis(ToolHandle.YAxis)
+    assert test_tool_1.getLockedAxis() == ToolHandle.YAxis
+    assert test_tool_handle_1.getActiveAxis() == ToolHandle.YAxis
+
+
+def test_getSelectedObjectsWithoutSelectedAncestors():
+    scene_node_1 = SceneNode()
+    Selection.add(scene_node_1)
+    test_tool_1 = Tool()
+    assert test_tool_1._getSelectedObjectsWithoutSelectedAncestors() == [scene_node_1]
 
 

@@ -17,7 +17,7 @@ import traceback
 import functools
 
 from UM.Event import CallFunctionEvent
-from UM.Decorators import deprecated, call_if_enabled
+from UM.Decorators import call_if_enabled
 from UM.Logger import Logger
 from UM.Platform import Platform
 from UM import FlameProfiler
@@ -142,8 +142,8 @@ class Signal:
         self.__type = type
 
         self._postpone_emit = False
-        self._postpone_thread = None    # type: threading.Thread
-        self._compress_postpone = False
+        self._postpone_thread = None    # type: Optional[threading.Thread]
+        self._compress_postpone = False # type: bool
         self._postponed_emits = None    # type: Any
 
         if _recordSignalNames():
@@ -292,7 +292,7 @@ class Signal:
     #   set by the Application instance.
     _app = None  # type: Application
 
-    _signalQueue = None  # type: SignalQueue
+    _signalQueue = None  # type: Application
 
     # Private implementation of the actual emit.
     # This is done to make it possible to freely push function events without needing to maintain state.
@@ -398,26 +398,6 @@ def postponeSignals(*signals, compress: CompressTechnique = CompressTechnique.No
 
         signal._postpone_thread = None
         signal._compress_postpone = False
-
-
-##  Convenience class to simplify signal creation.
-#
-#   This class is a Convenience class to simplify signal creation. Since signals
-#   need to be instance variables, normally you would need to create all signals
-#   in the class" `__init__` method. However, this makes them rather awkward to
-#   document. This class instead makes it possible to declare them as class variables,
-#   which makes documenting them near the function they are used possible.
-#   During the call to `__init__()`, this class will then search through all the
-#   properties of the instance and create instance variables for each class variable
-#   that is an instance of Signal.
-class SignalEmitter:
-    ##  Initialize method.
-    @deprecated("Please use the new @signalemitter decorator", "2.2")
-    def __init__(self, **kwargs):
-        super().__init__()
-        for name, signal in inspect.getmembers(self, lambda i: isinstance(i, Signal)):
-            setattr(self, name, Signal(type = signal.getType())) #pylint: disable=bad-whitespace
-
 
 ##  Class decorator that ensures a class has unique instances of signals.
 #

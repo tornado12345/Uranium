@@ -7,6 +7,7 @@ from UM.Mesh.MeshBuilder import MeshBuilder
 from UM.Logger import Logger
 from UM.Scene.SceneNode import SceneNode
 from UM.Job import Job
+from UM.MimeTypeDatabase import MimeTypeDatabase, MimeType
 
 import os
 import struct
@@ -25,19 +26,36 @@ except ImportError:
     Logger.log("w", "Could not find numpy-stl, falling back to slower code.")
     # We have our own fallback code.
 
+
 class STLReader(MeshReader):
-    def __init__(self):
-        super(STLReader, self).__init__()
+    def __init__(self) -> None:
+        super().__init__()
+
+        MimeTypeDatabase.addMimeType(
+            MimeType(
+                name = "model/stl",
+                comment = "Uranium STL File",
+                suffixes = ["stl"]
+            )
+        )
         self._supported_extensions = [".stl"]
 
     def load_file(self, file_name, mesh_builder, _use_numpystl = False):
+        file_read = False
         if _use_numpystl:
-            self._loadWithNumpySTL(file_name, mesh_builder)
-        else:
+            Logger.log("i", "Using NumPy-STL to load STL data.")
+            try:
+                self._loadWithNumpySTL(file_name, mesh_builder)
+                file_read = True
+            except:
+                Logger.logException("e", "Reading file failed with Numpy-STL!")
+        
+        if not file_read:
+            Logger.log("i", "Using legacy code to load STL data.")
             f = open(file_name, "rb")
             if not self._loadBinary(mesh_builder, f):
                 f.close()
-                f = open(file_name, "rt")
+                f = open(file_name, "rt", encoding = "utf-8")
                 try:
                     self._loadAscii(mesh_builder, f)
                 except UnicodeDecodeError:
@@ -49,7 +67,7 @@ class STLReader(MeshReader):
         mesh_builder.setFileName(file_name)
 
     ## Decide if we need to use ascii or binary in order to read file
-    def read(self, file_name):
+    def _read(self, file_name):
         mesh_builder = MeshBuilder()
         scene_node = SceneNode()
 
@@ -84,7 +102,7 @@ class STLReader(MeshReader):
         array[:, [frm, to]] = array[:, [to, frm]]
 
     def _loadWithNumpySTL(self, file_name, mesh_builder):
-        for loaded_data in stl.mesh.Mesh.from_multi_file(file_name):
+        for loaded_data in stl.mesh.Mesh.from_multi_file(file_name, mode=stl.stl.Mode.AUTOMATIC):
             vertices = numpy.resize(loaded_data.points.flatten(), (int(loaded_data.points.size / 3), 3))
 
             # Invert values of second column
@@ -96,7 +114,7 @@ class STLReader(MeshReader):
             mesh_builder.addVertices(vertices)
 
     # Private
-    ## Load the STL data from file by consdering the data as ascii.
+    ## Load the STL data from file by considering the data as ascii.
     # \param mesh The MeshData object where the data is written to.
     # \param f The file handle
     def _loadAscii(self, mesh_builder, f):

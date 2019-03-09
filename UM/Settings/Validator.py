@@ -2,17 +2,14 @@
 # Uranium is released under the terms of the LGPLv3 or higher.
 
 from enum import Enum
-from typing import Any, Optional
+from typing import Optional
 
 from UM.Settings.Interfaces import ContainerInterface
 from UM.Settings.PropertyEvaluationContext import PropertyEvaluationContext
 from UM.Logger import Logger
 
-MYPY = False
-if MYPY:
-    from UM.Settings.SettingInstance import SettingInstance
-
 from . import SettingFunction
+
 
 class ValidatorState(Enum):
     Exception = "Exception"
@@ -22,6 +19,7 @@ class ValidatorState(Enum):
     MinimumWarning = "MinimumWarning"
     MaximumError = "MaximumError"
     MaximumWarning = "MaximumWarning"
+
 
 ##  Validates that a SettingInstance's value is within a certain minimum and maximum value.
 #
@@ -40,9 +38,9 @@ class Validator(SettingFunction.SettingFunction):
         self._key = key  # type: str
 
     ##  Perform the actual validation.
-    def __call__(self, value_provider: ContainerInterface, context: Optional[PropertyEvaluationContext] = None) -> Any:
+    def __call__(self, value_provider: ContainerInterface, context: Optional[PropertyEvaluationContext] = None) -> Optional[ValidatorState]:
         if not value_provider:
-            return
+            return None
 
         state = ValidatorState.Unknown
         try:

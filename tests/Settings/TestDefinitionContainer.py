@@ -8,8 +8,9 @@ import uuid
 import UM.Settings.SettingFunction
 import UM.Settings.DefinitionContainer
 from UM.Settings.DefinitionContainer import IncorrectDefinitionVersionError, InvalidDefinitionError
-from UM.Settings.SettingDefinition import SettingDefinition, DefinitionPropertyType
+from UM.Settings.SettingDefinition import SettingDefinition
 from UM.Resources import Resources
+from UM.VersionUpgradeManager import VersionUpgradeManager
 
 Resources.addSearchPath(os.path.dirname(os.path.abspath(__file__)))
 
@@ -49,8 +50,8 @@ test_deserialize_data = [
     }})
 ]
 @pytest.mark.parametrize("file,expected", test_deserialize_data)
-def test_deserialize(file, expected, definition_container):
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "definitions", file)) as data:
+def test_deserialize(file, expected, definition_container, upgrade_manager: VersionUpgradeManager):
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "definitions", file), encoding = "utf-8") as data:
         json = data.read()
 
     definition_container.deserialize(json)
@@ -70,6 +71,25 @@ def test_deserialize(file, expected, definition_container):
 
         for property, property_value in value.items():
             assert getattr(setting, property) == property_value
+
+    all_keys = definition_container.getAllKeys()
+    all_expected_keys = set(expected["settings"].keys())
+    assert all_keys == all_expected_keys
+
+
+@pytest.mark.parametrize("file,expected", test_deserialize_data)
+def test_deserializeMetadata(file, expected, definition_container, upgrade_manager: VersionUpgradeManager):
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "definitions", file), encoding = "utf-8") as data:
+        json = data.read()
+
+    metadata = definition_container.deserializeMetadata(json, file)
+
+    assert metadata[0]["container_type"] == UM.Settings.DefinitionContainer.DefinitionContainer
+    assert metadata[0]["id"] == file
+
+    for key, value in expected["metadata"].items():
+        assert metadata[0][key] == value
+
 
 ##  Tests deserialising bad definition container JSONs.
 #
@@ -150,6 +170,7 @@ def test_deserialize_bad(definition_container):
     with pytest.raises(AttributeError):
         definition_container.deserialize(json)
 
+
 ##  Individual test cases for test_findDefinitions.
 #
 #   Each test case is a tuple consisting of:
@@ -175,6 +196,7 @@ test_findDefinitions_data = [
                                                                                                       { "key": "moo", "default_value": "bar" },
                                                                                                       { "key": "zoo", "default_value": "bar" } ])
 ]
+
 
 ##  Tests the filtering of definitions.
 #
@@ -202,6 +224,7 @@ def test_findDefinitions(description, query, result, data, definition_container)
             assert False
     # All expected answers had a match, so it's a good answer.
 
+
 ##  Tests getting metadata entries.
 #
 #   \param definition_container A new definition container from a fixture.
@@ -212,6 +235,7 @@ def test_getMetaDataEntry(definition_container):
     assert definition_container.getMetaDataEntry("foo") == "bar"
 
     assert definition_container.getMetaDataEntry("zoo", 42) == 42 # Non-existent entry must return the default.
+
 
 ##  The individual test cases for test_getValue.
 #
@@ -236,6 +260,7 @@ test_getValue_data = [
     ("Two options",   "foo", "bar",   [ { "key": "foo", "default_value": "bar" }, { "key": "foo", "default_value": "bar" } ])
 ]
 
+
 ##  Tests the getting of default values in the definition container.
 #
 #   \param description A description for the test case.
@@ -253,6 +278,7 @@ def test_getValue(description, key, value, data, definition_container):
     answer = definition_container.getProperty(key, "value")
 
     assert answer == value
+
 
 ##  Tests the serialisation and deserialisation process.
 #
@@ -294,6 +320,7 @@ def test_serialize(definition_container):
     definition_container.definitions.append(subsetting)
     _test_serialize_cycle(definition_container)
 
+
 ##  Tests the serialisation with certain metadata keys ignored.
 #
 #   \param definition_container A new definition container from a fixture.
@@ -308,9 +335,10 @@ def test_serialize_with_ignored_metadata_keys(definition_container):
 
     _test_serialize_cycle(definition_container, ignored_metadata_keys = ignored_metadata_keys)
 
+
 def test_setting_function():
     container = UM.Settings.DefinitionContainer.DefinitionContainer("test")
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "definitions", "functions.def.json")) as data:
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "definitions", "functions.def.json"), encoding = "utf-8") as data:
         container.deserialize(data.read())
 
     setting_0 = container.findDefinitions(key = "test_setting_0")[0]
@@ -339,6 +367,7 @@ def test_setting_function():
     result = function(container)
     assert result == (setting_0.default_value * 10)
 
+
 ##  Creates a setting definition from a dictionary of properties.
 #
 #   The key must be present in the properties. It will be the key of the setting
@@ -357,6 +386,7 @@ def _createSettingDefinition(properties):
         for child in properties["children"]:
             result.children.append(_createSettingDefinition(child))
     return result
+
 
 ##  Tests one cycle of serialising and deserialising.
 #

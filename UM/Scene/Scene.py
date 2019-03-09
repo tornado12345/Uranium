@@ -14,14 +14,12 @@ from UM.Mesh.ReadMeshJob import ReadMeshJob  # To reload a mesh when its file wa
 from UM.Message import Message  # To display a message for reloading files that were changed.
 from UM.Scene.Camera import Camera
 from UM.Scene.Iterator.BreadthFirstIterator import BreadthFirstIterator
+from UM.Scene.SceneNode import SceneNode
 from UM.Signal import Signal, signalemitter
 from UM.i18n import i18nCatalog
+from UM.Platform import Platform
 
 i18n_catalog = i18nCatalog("uranium")
-
-MYPY = False
-if MYPY:
-    from UM.Scene.SceneNode import SceneNode
 
 
 ##  Container object for the scene graph
@@ -29,11 +27,11 @@ if MYPY:
 #   The main purpose of this class is to provide the root SceneNode.
 @signalemitter
 class Scene:
-    def __init__(self):
-        super().__init__()  # Call super to make multiple inheritance work.
+    def __init__(self) -> None:
+        super().__init__()
 
         from UM.Scene.SceneNode import SceneNode
-        self._root = SceneNode(name= "Root")
+        self._root = SceneNode(name = "Root")
         self._root.setCalculateBoundingBox(False)
         self._connectSignalsRoot()
         self._active_camera = None  # type: Optional[Camera]
@@ -43,6 +41,8 @@ class Scene:
         # Watching file for changes.
         self._file_watcher = QFileSystemWatcher()
         self._file_watcher.fileChanged.connect(self._onFileChanged)
+
+        self._reload_message = None  # type: Optional[Message]
 
     def _connectSignalsRoot(self) -> None:
         self._root.transformationChanged.connect(self.sceneChanged)
@@ -83,7 +83,7 @@ class Scene:
     #   Use this lock to prevent any read or write actions on the scene from other threads,
     #   assuming those threads also properly acquire the lock. Most notably, this
     #   prevents the rendering thread from rendering the scene while it is changing.
-    def getSceneLock(self):
+    def getSceneLock(self) -> threading.Lock:
         return self._lock
 
     ##  Get the root node of the scene.
@@ -108,7 +108,7 @@ class Scene:
 
     def getAllCameras(self) -> List[Camera]:
         cameras = []
-        for node in BreadthFirstIterator(self._root):
+        for node in BreadthFirstIterator(self._root):  # type: ignore
             if isinstance(node, Camera):
                 cameras.append(node)
         return cameras
@@ -122,7 +122,7 @@ class Scene:
         else:
             Logger.log("w", "Couldn't find camera with name [%s] to activate!" % name)
 
-    ##  Signal. Emitted whenever something in the scene changes.
+    ##  Signal that is emitted whenever something in the scene changes.
     #   \param object The object that triggered the change.
     sceneChanged = Signal()
 
@@ -132,64 +132,79 @@ class Scene:
     #
     #   \return The object if found, or None if not.
     def findObject(self, object_id: int) -> Optional["SceneNode"]:
-        for node in BreadthFirstIterator(self._root):
+        for node in BreadthFirstIterator(self._root):  # type: ignore
             if id(node) == object_id:
                 return node
         return None
 
     def findCamera(self, name: str) -> Optional[Camera]:
-        for node in BreadthFirstIterator(self._root):
+        for node in BreadthFirstIterator(self._root):  # type: ignore
             if isinstance(node, Camera) and node.getName() == name:
                 return node
+        return None
 
     ##  Add a file to be watched for changes.
     #   \param file_path The path to the file that must be watched.
     def addWatchedFile(self, file_path: str) -> None:
-        self._file_watcher.addPath(file_path)
+        # The QT 5.10.0 issue, only on Windows. Cura crashes after loading a stl file from USB/sd-card/Cloud-based drive
+        if not Platform.isWindows():
+            self._file_watcher.addPath(file_path)
 
     ##  Remove a file so that it will no longer be watched for changes.
     #   \param file_path The path to the file that must no longer be watched.
     def removeWatchedFile(self, file_path: str) -> None:
-        self._file_watcher.removePath(file_path)
+        # The QT 5.10.0 issue, only on Windows. Cura crashes after loading a stl file from USB/sd-card/Cloud-based drive
+        if not Platform.isWindows():
+            self._file_watcher.removePath(file_path)
 
     ##  Triggered whenever a file is changed that we currently have loaded.
     def _onFileChanged(self, file_path: str) -> None:
-        if not os.path.isfile(file_path): #File doesn't exist any more.
+        if not os.path.isfile(file_path) or os.path.getsize(file_path) == 0:  # File doesn't exist any more, or it is empty
             return
 
-        #Multiple nodes may be loaded from the same file at different stages. Reload them all.
-        from UM.Scene.Iterator.DepthFirstIterator import DepthFirstIterator #To find which nodes to reload when files have changed.
-        modified_nodes = (node for node in DepthFirstIterator(self.getRoot()) if node.getMeshData() and node.getMeshData().getFileName() == file_path)
+        # Multiple nodes may be loaded from the same file at different stages. Reload them all.
+        from UM.Scene.Iterator.DepthFirstIterator import DepthFirstIterator  # To find which nodes to reload when files have changed.
+        modified_nodes = [node for node in DepthFirstIterator(self.getRoot()) if node.getMeshData() and node.getMeshData().getFileName() == file_path]  # type: ignore
 
         if modified_nodes:
-            message = Message(i18n_catalog.i18nc("@info", "Would you like to reload {filename}?").format(filename = os.path.basename(self._file_name)),
+            # Hide the message if it was already visible
+            if self._reload_message is not None:
+                self._reload_message.hide()
+
+            self._reload_message = Message(i18n_catalog.i18nc("@info", "Would you like to reload {filename}?").format(filename = os.path.basename(file_path)),
                               title = i18n_catalog.i18nc("@info:title", "File has been modified"))
-            message.addAction("reload", i18n_catalog.i18nc("@action:button", "Reload"), icon = None, description = i18n_catalog.i18nc("@action:description", "This will trigger the modified files to reload from disk."))
-            message.actionTriggered.connect(functools.partialmethod(self._reloadNodes, modified_nodes))
-            message.show()
+            self._reload_message.addAction("reload", i18n_catalog.i18nc("@action:button", "Reload"), icon = "", description = i18n_catalog.i18nc("@action:description", "This will trigger the modified files to reload from disk."))
+            self._reload_callback = functools.partial(self._reloadNodes, modified_nodes)
+            self._reload_message.actionTriggered.connect(self._reload_callback)
+            self._reload_message.show()
 
     ##  Reloads a list of nodes after the user pressed the "Reload" button.
     #   \param nodes The list of nodes that needs to be reloaded.
     #   \param message The message that triggered the action to reload them.
     #   \param action The button that triggered the action to reload them.
-    def _reloadNodes(self, nodes: List["SceneNode"], message, action) -> None:
+    def _reloadNodes(self, nodes: List["SceneNode"], message: str, action: str) -> None:
         if action != "reload":
             return
+        if self._reload_message is not None:
+            self._reload_message.hide()
         for node in nodes:
-            if not os.path.isfile(node.getMeshData().getFileName()): #File doesn't exist any more.
-                continue
-            job = ReadMeshJob(node.getMeshData().getFileName())
-            job._node = node
-            job.finished.connect(self._reloadJobFinished)
-            job.start()
+            meshdata = node.getMeshData()
+            if meshdata:
+                filename = meshdata.getFileName()
+                if not filename or not os.path.isfile(filename):  # File doesn't exist any more.
+                    continue
+                job = ReadMeshJob(filename)
+                self._reload_finished_callback = functools.partial(self._reloadJobFinished, node)
+                job.finished.connect(self._reload_finished_callback)
+                job.start()
 
     ##  Triggered when reloading has finished.
     #
     #   This then puts the resulting mesh data in the node.
-    def _reloadJobFinished(self, job: ReadMeshJob) -> None:
+    def _reloadJobFinished(self, replaced_node: SceneNode, job: ReadMeshJob) -> None:
         for node in job.getResult():
             mesh_data = node.getMeshData()
             if mesh_data:
-                job._node.setMeshData(mesh_data)
+                replaced_node.setMeshData(mesh_data)
             else:
                 Logger.log("w", "Could not find a mesh in reloaded node.")

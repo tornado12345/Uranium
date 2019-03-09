@@ -2,21 +2,20 @@
 # Uranium is released under the terms of the LGPLv3 or higher.
 
 import collections
-import itertools
 import os.path
+from typing import List
 
 from PyQt5.QtCore import Qt, QAbstractListModel, QVariant, QModelIndex, QObject, pyqtProperty, pyqtSignal
 from UM.FlameProfiler import pyqtSlot
 
 from UM.Logger import Logger
-from UM.Preferences import Preferences
-from UM.Resources import Resources
 from UM.Settings import SettingRelation
 from UM.i18n import i18nCatalog
 from UM.Application import Application
 
 from UM.Settings.ContainerRegistry import ContainerRegistry
-from UM.Settings.SettingDefinition import SettingDefinition, DefinitionPropertyType
+from UM.Settings.SettingDefinition import SettingDefinition
+
 
 ##  Model that provides a flattened list of the tree of SettingDefinition objects in a DefinitionContainer
 #
@@ -49,9 +48,12 @@ class SettingDefinitionsModel(QAbstractListModel):
         self._visible = set()
         self._exclude = set()
 
-        self._show_all = False
-        self._show_ancestors = False
+        self._show_all = False  # type: bool
+        self._show_ancestors = False  # type: bool
         self._visibility_handler = None
+
+        self._update_visible_row_scheduled = False  # type: bool
+        self._destroyed = False  # type: bool
 
         self._filter_dict = {}
 
@@ -66,22 +68,31 @@ class SettingDefinitionsModel(QAbstractListModel):
             self._role_names[index] = name.encode()
             index += 1
 
+        self.destroyed.connect(self._onDestroyed)
+
     ##  Emitted whenever the showAncestors property changes.
     showAncestorsChanged = pyqtSignal()
 
-    def setShowAncestors(self, show_ancestors):
+    def _onDestroyed(self) -> None:
+        self._destroyed = True
+
+    @pyqtSlot(bool)
+    def setDestroyed(self, value: bool) -> None:
+        self._destroyed = value
+
+    def setShowAncestors(self, show_ancestors: bool) -> None:
         if show_ancestors != self._show_ancestors:
             self._show_ancestors = show_ancestors
             self._update()
-            self.showAncestorsChanged.emit()
+            self._scheduleUpdateVisibleRows()
 
     @pyqtProperty(bool, fset=setShowAncestors, notify=showAncestorsChanged)
     # Should we still show ancestors, even if filter says otherwise?
-    def showAncestors(self):
+    def showAncestors(self) -> bool:
         return self._show_ancestors
 
     ##  Set the containerId property.
-    def setContainerId(self, container_id):
+    def setContainerId(self, container_id: str) -> None:
         if container_id != self._container_id:
             self._container_id = container_id
 
@@ -96,13 +107,14 @@ class SettingDefinitionsModel(QAbstractListModel):
 
     ##  Emitted whenever the containerId property changes.
     containerIdChanged = pyqtSignal()
+
     ##  The ID of the DefinitionContainer object this model exposes.
     @pyqtProperty(str, fset = setContainerId, notify = containerIdChanged)
-    def containerId(self):
+    def containerId(self) -> str:
         return self._container_id
 
     ##  Set the rootKey property.
-    def setRootKey(self, key):
+    def setRootKey(self, key: str) -> None:
         if key != self._root_key:
             self._root_key = key
 
@@ -119,24 +131,25 @@ class SettingDefinitionsModel(QAbstractListModel):
 
     ##  Emitted when the rootKey property changes.
     rootKeyChanged = pyqtSignal()
+
     ##  The SettingDefinition to use as root for the list.
     @pyqtProperty(str, fset = setRootKey, notify = rootKeyChanged)
     def rootKey(self):
         return self._root_key
 
     ##  Set the showAll property.
-    def setShowAll(self, show):
+    def setShowAll(self, show: bool) -> None:
         if show != self._show_all:
             self._show_all = show
             self.showAllChanged.emit()
-            self._updateVisibleRows()
+            self._scheduleUpdateVisibleRows()
 
     ##  Emitted when the showAll property changes.
     showAllChanged = pyqtSignal()
 
     ##  Whether or not the model should show all definitions regardless of visibility.
     @pyqtProperty(bool, fset = setShowAll, notify = showAllChanged)
-    def showAll(self):
+    def showAll(self) -> bool:
         return self._show_all
 
     visibilityChanged = pyqtSignal()
@@ -170,7 +183,7 @@ class SettingDefinitionsModel(QAbstractListModel):
         if exclude != self._exclude:
             self._exclude = exclude
             self.excludeChanged.emit()
-            self._updateVisibleRows()
+            self._scheduleUpdateVisibleRows()
 
     ##  Emitted whenever the exclude property changes
     excludeChanged = pyqtSignal()
@@ -181,7 +194,7 @@ class SettingDefinitionsModel(QAbstractListModel):
         return list(self._exclude)
 
     ##  Set the expanded property
-    def setExpanded(self, expanded):
+    def setExpanded(self, expanded: List[str]) -> None:
         new_expanded = set()
         for item in expanded:
             if item == "*":
@@ -194,19 +207,19 @@ class SettingDefinitionsModel(QAbstractListModel):
         if new_expanded != self._expanded:
             self._expanded = new_expanded
             self.expandedChanged.emit()
-            self._updateVisibleRows()
+            self._scheduleUpdateVisibleRows()
 
     ##  Emitted whenever the exclude property changes
     expandedChanged = pyqtSignal()
 
     ##  This property indicates which settings should never be visibile.
     @pyqtProperty("QStringList", fset = setExpanded, notify = expandedChanged)
-    def expanded(self):
+    def expanded(self) -> List[str]:
         return list(self._expanded)
 
     visibleCountChanged = pyqtSignal()
     @pyqtProperty(int, notify = visibleCountChanged)
-    def visibleCount(self):
+    def visibleCount(self) -> int:
         count = 0
         for index in self._row_index_list:
             definition = self._definition_list[index]
@@ -216,7 +229,7 @@ class SettingDefinitionsModel(QAbstractListModel):
         return count
 
     @pyqtProperty(int, notify = visibleCountChanged)
-    def categoryCount(self):
+    def categoryCount(self) -> int:
         count = 0
         for index in self._row_index_list:
             definition = self._definition_list[index]
@@ -231,7 +244,7 @@ class SettingDefinitionsModel(QAbstractListModel):
         if filter_dict != self._filter_dict:
             self._filter_dict = filter_dict
             self.filterChanged.emit()
-            self._updateVisibleRows()
+            self._scheduleUpdateVisibleRows()
 
     filterChanged = pyqtSignal()
 
@@ -245,11 +258,11 @@ class SettingDefinitionsModel(QAbstractListModel):
         if key not in self._expanded:
             self._expanded.add(key)
             self.expandedChanged.emit()
-            self._updateVisibleRows()
+            self._scheduleUpdateVisibleRows()
 
     ##  Show the children of a specified SettingDefinition and all children of those settings as well.
     @pyqtSlot(str)
-    def expandRecursive(self, key):
+    def expandRecursive(self, key: str) -> None:
         if not self._container:
             return
 
@@ -259,12 +272,11 @@ class SettingDefinitionsModel(QAbstractListModel):
         self.expand(key)
 
         for child in definitions[0].children:
-            if child.children:
-                self.expandRecursive(child.key)
+            self.expandRecursive(child.key)
 
     ##  Hide the children of a specified SettingDefinition.
     @pyqtSlot(str)
-    def collapse(self, key):
+    def collapse(self, key: str) -> None:
         if not self._container:
             return
 
@@ -278,24 +290,23 @@ class SettingDefinitionsModel(QAbstractListModel):
         self._expanded.remove(key)
 
         for child in definitions[0].children:
-            if child.children:
-                self.collapse(child.key)
+            self.collapse(child.key)
 
         self.expandedChanged.emit()
-        self._updateVisibleRows()
+        self._scheduleUpdateVisibleRows()
 
     ##  Show a single SettingDefinition.
     @pyqtSlot(str)
-    def show(self, key):
+    def show(self, key: str) -> None:
         self.setVisible(key, True)
 
     ##  Hide a single SettingDefinition.
     @pyqtSlot(str)
-    def hide(self, key):
+    def hide(self, key: str) -> None:
         self.setVisible(key, False)
 
     @pyqtSlot(bool)
-    def setAllExpandedVisible(self, visible):
+    def setAllExpandedVisible(self, visible: bool) -> None:
         new_visible = set()
 
         for index in self._row_index_list:
@@ -309,7 +320,7 @@ class SettingDefinitionsModel(QAbstractListModel):
             self._visibility_handler.setVisible(self._visible - new_visible)
 
     @pyqtSlot(bool)
-    def setAllVisible(self, visible):
+    def setAllVisible(self, visible: bool) -> None:
         new_visible = set()
 
         for definition in self._definition_list:
@@ -323,7 +334,7 @@ class SettingDefinitionsModel(QAbstractListModel):
 
     ##  Set a single SettingDefinition's visible state
     @pyqtSlot(str, bool)
-    def setVisible(self, key, visible):
+    def setVisible(self, key: str, visible: bool) -> None:
         if key in self._visible and visible:
             # Ignore already visible settings that need to be made visible.
             return
@@ -347,11 +358,11 @@ class SettingDefinitionsModel(QAbstractListModel):
 
     ##  Get a single SettingDefinition's visible state
     @pyqtSlot(str, result = bool)
-    def getVisible(self, key):
+    def getVisible(self, key: str) -> bool:
         return key in self._visible
 
     @pyqtSlot(str, result = int)
-    def getIndex(self, key):
+    def getIndex(self, key: str) -> int:
         if not self._container:
             return -1
         definitions = self._container.findDefinitions(key = key)
@@ -359,6 +370,11 @@ class SettingDefinitionsModel(QAbstractListModel):
             return -1
 
         index = self._definition_list.index(definitions[0])
+
+        # Make sure self._row_index_list is populated
+        if self._update_visible_row_scheduled:
+            self._update_visible_row_scheduled = False
+            self._updateVisibleRows()
 
         try:
             return self._row_index_list.index(index)
@@ -415,16 +431,32 @@ class SettingDefinitionsModel(QAbstractListModel):
 
         return result
 
+    ##  Reimplemented from ListModel only because we want to use it in static
+    #   context in the subclass.
+    itemsChanged = pyqtSignal()
+
     ##  Reimplemented from QAbstractListModel
-    # Note that rowCount() is overridden from QAbstractItemModel. The signature of the method in that
-    # class is "int rowCount(const QModelIndex& parent)" which makes this slot declaration incorrect.
-    # TODO: fix the pointer when actually using this parameter.
-    @pyqtSlot(QObject, result = int)
-    def rowCount(self, parent = None):
+    #
+    #   Note that count() is overridden from QAbstractItemModel. The signature
+    #   of the method in that class is "int count()" which makes this slot
+    #   declaration incorrect.
+    #   TODO: fix the pointer when actually using this parameter.
+    @pyqtProperty(int, notify = itemsChanged)
+    def count(self):
         if not self._container:
             return 0
 
         return len(self._row_index_list)
+
+    ##  This function is necessary because it is abstract in QAbstractListModel.
+    #
+    #   Under the hood, Qt will call this function when it needs to know how
+    #   many items are in the model.
+    #   This pyqtSlot will not be linked to the itemsChanged signal, so please
+    #   use the normal count() function instead.
+    @pyqtSlot(QObject, result = int)
+    def rowCount(self, parent = None) -> int:
+        return self.count
 
     ##  Reimplemented from QAbstractListModel
     def data(self, index, role):
@@ -476,7 +508,7 @@ class SettingDefinitionsModel(QAbstractListModel):
     def roleNames(self):
         return self._role_names
 
-    def _onVisibilityChanged(self):
+    def _onVisibilityChanged(self) -> None:
         self._visible = self._visibility_handler.getVisible()
 
         for row in range(len(self._row_index_list)):
@@ -484,16 +516,22 @@ class SettingDefinitionsModel(QAbstractListModel):
 
         self._updateVisibleRows()
 
+    # Schedules to call _updateVisibleRows() later.
+    def _scheduleUpdateVisibleRows(self) -> None:
+        if not self._update_visible_row_scheduled:
+            self._update_visible_row_scheduled = True
+            Application.getInstance().callLater(self._updateVisibleRows)
+
     ##  Force updating the model.
     @pyqtSlot()
-    def forceUpdate(self):
+    def forceUpdate(self) -> None:
         self._update()
 
     # Update the internal list of definitions and the visibility mapping.
     #
     # Note that this triggers a model reset and should only be called when the
     # underlying data needs to be updated. Otherwise call _updateVisibleRows.
-    def _update(self):
+    def _update(self) -> None:
         if not self._container:
             return
 
@@ -503,25 +541,39 @@ class SettingDefinitionsModel(QAbstractListModel):
             if catalog.hasTranslationLoaded():
                 self._i18n_catalog = catalog
 
-        self.beginResetModel()
-
-        self._definition_list.clear()
-        self._row_index_list.clear()
-
         if self._root:
-            self._definition_list = self._root.findDefinitions()
+            new_definitions = self._root.findDefinitions()
         else:
-            self._definition_list = self._container.findDefinitions()
+            new_definitions = self._container.findDefinitions()
 
-        self._updateVisibleRows()
-
-        self.endResetModel()
+        # Check if a full reset is required
+        if len(new_definitions) != len(self._definition_list):
+            self.beginResetModel()
+            self._definition_list = new_definitions
+            self._row_index_list.clear()
+            self._scheduleUpdateVisibleRows()
+            self.endResetModel()
+        else:
+            # If the length hasn't changed, we can just notify that the data was changed. This will prevent the existing
+            # QML setting items from being re-created every you switch between machines.
+            self._definition_list = new_definitions
+            self._scheduleUpdateVisibleRows()
+            self.dataChanged.emit(self.index(0, 0), self.index(len(self._definition_list) - 1, 0))
 
     # Update the list of visible rows.
     #
     # This will compute the difference between the old state and the new state and
     # insert/remove rows as appropriate.
-    def _updateVisibleRows(self):
+    def _updateVisibleRows(self) -> None:
+        # This function is scheduled on the Qt event loop. By the time this is called, this object can already been
+        # destroyed because the owner QML widget was destroyed or so. We cannot cancel a call that has been scheduled,
+        # so in this case, we should do nothing if this object has already been destroyed.
+        if self._destroyed:
+            return
+
+        # Reset the scheduled flag
+        self._update_visible_row_scheduled = False
+
         currently_visible = set(self._row_index_list) # A set of currently visible items
 
         new_visible = set() # A new set of visible items
@@ -614,7 +666,7 @@ class SettingDefinitionsModel(QAbstractListModel):
                 continue
 
             if child.key in self._visible:
-                if Application.getInstance().getGlobalContainerStack().getProperty(child.key, "enabled"):
+                if self._container.getProperty(child.key, "enabled"):
                     return True
 
             if self._isAnyDescendantVisible(child):
