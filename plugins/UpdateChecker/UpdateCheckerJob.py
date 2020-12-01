@@ -1,23 +1,27 @@
 # Copyright (c) 2018 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 
+import codecs
+import json
+import platform
+import ssl
+import urllib.request
+
+import certifi
+
 from UM.Application import Application
+from UM.Job import Job
+from UM.Logger import Logger
 from UM.Message import Message
 from UM.Version import Version
-from UM.Logger import Logger
-from UM.Job import Job
-
-import urllib.request
-import platform
-import json
-import codecs
-
 from UM.i18n import i18nCatalog
+
 i18n_catalog = i18nCatalog("uranium")
 
 
-##  This job checks if there is an update available on the provided URL.
 class UpdateCheckerJob(Job):
+    """This job checks if there is an update available on the provided URL."""
+
     def __init__(self, silent = False, display_same_version = True, url = None, callback = None, set_download_url_callback = None):
         super().__init__()
         self.silent = silent
@@ -36,10 +40,14 @@ class UpdateCheckerJob(Job):
         Logger.log("i", "Checking for new version of %s" % application_name)
         try:
             headers = {"User-Agent": "%s - %s" % (application_name, Application.getInstance().getVersion())}
+            # CURA-6698 Create an SSL context and use certifi CA certificates for verification.
+            context = ssl.SSLContext(protocol = ssl.PROTOCOL_TLSv1_2)
+            context.verify_mode = ssl.CERT_REQUIRED
+            context.load_verify_locations(cafile = certifi.where())
             request = urllib.request.Request(self._url, headers = headers)
-            latest_version_file = urllib.request.urlopen(request)
+            latest_version_file = urllib.request.urlopen(request, context = context)
         except Exception as e:
-            Logger.log("w", "Failed to check for new version: %s" % e)
+            Logger.logException("w", "Failed to check for new version: %s" % e)
             if not self.silent:
                 Message(i18n_catalog.i18nc("@info", "Could not access update information."),
                     title = i18n_catalog.i18nc("@info:title", "Version Upgrade")
@@ -50,7 +58,7 @@ class UpdateCheckerJob(Job):
             reader = codecs.getreader("utf-8")
             data = json.load(reader(latest_version_file))
             try:
-                if Application.getInstance().getVersion() is not "master":
+                if Application.getInstance().getVersion() != "master":
                     local_version = Version(Application.getInstance().getVersion())
                 else:
                     if not self.silent:
@@ -72,7 +80,7 @@ class UpdateCheckerJob(Job):
                                 preferences = Application.getInstance().getPreferences()
                                 latest_version_shown = preferences.getValue("info/latest_update_version_shown")
                                 if latest_version_shown == newest_version and not self.display_same_version:
-                                    continue #Don't show this update again. The user already clicked it away and doesn't want it again.
+                                    continue  # Don't show this update again. The user already clicked it away and doesn't want it again.
                                 preferences.setValue("info/latest_update_version_shown", str(newest_version))
                                 Logger.log("i", "Found a new version of the software. Spawning message")
                                 self.showUpdate(newest_version, value["url"])

@@ -6,8 +6,7 @@ import QtQuick.Controls 1.1
 import QtQuick.Controls.Styles 1.3
 import QtQuick.Layouts 1.1
 
-import UM 1.0 as UM
-import "."
+import UM 1.3 as UM
 
 ListView
 {
@@ -92,7 +91,7 @@ ListView
                 margins: UM.Theme.getSize("default_margin").width
             }
 
-            height: UM.Theme.getSize("message_close").height
+            height: childrenRect.height
 
             Button
             {
@@ -134,9 +133,10 @@ ListView
                 text: model.title == undefined ? "" : model.title
                 color: UM.Theme.getColor("text")
                 font: UM.Theme.getFont("default_bold")
+                wrapMode: Text.WordWrap
                 elide: Text.ElideRight
+                maximumLineCount: 2
                 renderType: Text.NativeRendering
-                height: parent.height
             }
         }
         Item
@@ -191,6 +191,7 @@ ListView
                 color: UM.Theme.getColor("text")
                 font: UM.Theme.getFont("large_bold")
                 height: contentHeight
+                linkColor: UM.Theme.getColor("text_link")
             }
         }
 
@@ -210,7 +211,7 @@ ListView
                 topMargin: UM.Theme.getSize("narrow_margin").height
             }
 
-            height: contentHeight
+            height: text == "" ? 0 : contentHeight
 
             function getProgressText()
             {
@@ -223,8 +224,8 @@ ListView
             font: UM.Theme.getFont("default")
             wrapMode: Text.Wrap
             renderType: Text.NativeRendering
+            linkColor: UM.Theme.getColor("text_link")
         }
-
 
         CheckBox
         {
@@ -255,11 +256,9 @@ ListView
             }
         }
 
-        ProgressBar
+        UM.ProgressBar
         {
             id: totalProgressBar
-            minimumValue: 0
-            maximumValue: model.max_progress
             value: 0
 
             // Doing this in an explicit binding since the implicit binding breaks on occasion.
@@ -267,16 +266,11 @@ ListView
             {
                 target: totalProgressBar
                 property: "value"
-                value: model.progress
+                value: model.progress / model.max_progress
             }
 
             visible: model.progress == null ? false: true // If the progress is null (for example with the loaded message) -> hide the progressbar
             indeterminate: model.progress == -1 ? true: false //If the progress is unknown (-1) -> the progressbar is indeterminate
-            style: UM.Theme.styles.progressbar
-
-
-            property string backgroundColor: UM.Theme.getColor("message_progressbar_background")
-            property string controlColor: UM.Theme.getColor("message_progressbar_control")
 
             anchors
             {

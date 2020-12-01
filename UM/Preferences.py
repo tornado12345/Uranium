@@ -4,7 +4,6 @@
 import configparser
 from typing import Any, Dict, IO, Optional, Tuple, Union
 
-from UM.Decorators import deprecated
 from UM.Logger import Logger
 from UM.MimeTypeDatabase import MimeTypeDatabase, MimeType #To register the MIME type of the preference file.
 from UM.SaveFile import SaveFile
@@ -20,11 +19,14 @@ MimeTypeDatabase.addMimeType(
 )
 
 
-##      Preferences are application based settings that are saved for future use.
-#       Typical preferences would be window size, standard machine, etc.
-#       The application preferences can be gotten from the getPreferences() function in Application
 @signalemitter
 class Preferences:
+    """Preferences are application based settings that are saved for future use.
+
+    Typical preferences would be window size, standard machine, etc.
+    The application preferences can be gotten from the getPreferences() function in Application
+    """
+
     Version = 6
 
     def __init__(self) -> None:
@@ -33,8 +35,12 @@ class Preferences:
         self._parser = None  # type: Optional[configparser.ConfigParser]
         self._preferences = {}  # type: Dict[str, Dict[str, _Preference]]
 
-    ##  Add a new preference to the list. If the preference was already added, it's default is set to whatever is provided
     def addPreference(self, key: str, default_value: Any) -> None:
+        """Add a new preference to the list.
+
+        If the preference was already added, it's default is set to whatever is provided
+        """
+
         if key.count("/") != 1:
             raise Exception("Preferences must be in the [CATEGORY]/[KEY] format")
         preference = self._findPreference(key)
@@ -58,14 +64,16 @@ class Preferences:
         del self._preferences[group][key]
         Logger.log("i", "Preferences '%s' removed.", key)
 
-    ##  Changes the default value of a preference.
-    #
-    #   If the preference is currently set to the old default, the value of the
-    #   preference will be set to the new default.
-    #
-    #   \param key The key of the preference to set the default of.
-    #   \param default_value The new default value of the preference.
     def setDefault(self, key: str, default_value: Any) -> None:
+        """Changes the default value of a preference.
+
+        If the preference is currently set to the old default, the value of the
+        preference will be set to the new default.
+
+        :param key: The key of the preference to set the default of.
+        :param default_value: The new default value of the preference.
+        """
+
         preference = self._findPreference(key)
         if not preference:  # Key not found.
             Logger.log("w", "Tried to set the default value of non-existing setting %s.", key)
@@ -149,7 +157,8 @@ class Preferences:
         except Exception as e:
             Logger.log("e", "Failed to write preferences to %s: %s", file, str(e))
 
-    preferenceChanged = Signal()
+    # A lot of things listen in on the preference changed signal, so always queue it for the next frame.
+    preferenceChanged = Signal(Signal.Queued)
 
     def _splitKey(self, key: str) -> Tuple[str, str]:
         group = "general"
@@ -190,11 +199,17 @@ class Preferences:
 
         del self._parser["general"]["version"]
 
-    ##  Extract data from string and store it in the Configuration parser.
     def deserialize(self, serialized: str) -> None:
+        """Extract data from string and store it in the Configuration parser."""
+
         updated_preferences = self.__updateSerialized(serialized)
         self._parser = configparser.ConfigParser(interpolation = None)
-        self._parser.read_string(updated_preferences)
+        try:
+            self._parser.read_string(updated_preferences)
+        except (configparser.MissingSectionHeaderError, configparser.DuplicateOptionError, configparser.DuplicateSectionError, configparser.ParsingError, configparser.InterpolationError) as e:
+            Logger.log("w", "Could not deserialize preferences file: {error}".format(error = str(e)))
+            self._parser = None
+            return
         has_version = "general" in self._parser and "version" in self._parser["general"]
 
         if has_version:
@@ -207,8 +222,9 @@ class Preferences:
 
         self.__initializeSettings()
 
-    ##  Updates the given serialized data to the latest version.
     def __updateSerialized(self, serialized: str) -> str:
+        """Updates the given serialized data to the latest version."""
+
         configuration_type = "preferences"
 
         try:
@@ -221,13 +237,6 @@ class Preferences:
         except:
             Logger.logException("d", "An exception occurred while trying to update the preferences.")
         return serialized
-
-    ##  This method is still used by some external plugins and it needs to be kept as deprecated
-    @classmethod
-    @deprecated("Please use Application.getInstance().getPreferences() instead", "3.3")
-    def getInstance(cls) -> "Preferences":
-        from UM.Application import Application
-        return Application.getInstance().getPreferences()
 
 
 class _Preference:

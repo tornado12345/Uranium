@@ -22,9 +22,10 @@ from math import log
 from operator import add, eq, ne, gt, ge, lt, le, iadd
 from textwrap import dedent
 
-###############################################################################
+from typing import Any, Callable
+
+
 # BEGIN Python 2/3 Shims
-###############################################################################
 
 try:
     from collections.abc import Sequence, MutableSequence
@@ -47,6 +48,46 @@ else:
         from _thread import get_ident
     except ImportError:
         from _dummy_thread import get_ident
+
+
+def _make_cmp(seq_op: Callable[[Any, Any], bool], symbol: str, doc: str) -> Callable:
+    "Make comparator method."
+    def comparer(one: "SortedList", other: "SortedList") -> bool:
+        "Compare method for sorted list and sequence."
+        if not isinstance(other, Sequence):
+            return NotImplemented
+
+        one_len = one._len
+        len_other = len(other)
+
+        if one_len != len_other:
+            if seq_op is eq:
+                return False
+            if seq_op is ne:
+                return True
+
+        for alpha, beta in zip(one, other):
+            if alpha != beta:
+                return seq_op(alpha, beta)
+
+        return seq_op(one_len, len_other)
+
+    seq_op_name = seq_op.__name__
+    comparer.__name__ = '__{0}__'.format(seq_op_name)
+    doc_str = """Return true if and only if sorted list is {0} `other`.
+
+    ``sl.__{1}__(other)`` <==> ``sl {2} other``
+
+    Comparisons use lexicographical order as with sequences.
+
+    Runtime complexity: `O(n)`
+
+    :param other: `other` sequence
+    :return: true if sorted list is {0} `other`
+
+    """
+    comparer.__doc__ = dedent(doc_str.format(doc, seq_op_name, symbol))
+    return comparer
 
 
 def recursive_repr(fillvalue='...'):
@@ -74,9 +115,7 @@ def recursive_repr(fillvalue='...'):
 
     return decorating_function
 
-###############################################################################
 # END Python 2/3 Shims
-###############################################################################
 
 
 class SortedList(MutableSequence):
@@ -137,7 +176,6 @@ class SortedList(MutableSequence):
     """
     DEFAULT_LOAD_FACTOR = 1000
 
-
     def __init__(self, iterable=None, key=None):
         """Initialize sorted list instance.
 
@@ -166,7 +204,6 @@ class SortedList(MutableSequence):
 
         if iterable is not None:
             self._update(iterable)
-
 
     def __new__(cls, iterable=None, key=None):
         """Create new sorted list or sorted-key list instance.
@@ -1531,53 +1568,13 @@ class SortedList(MutableSequence):
         return self
 
 
-    def __make_cmp(seq_op, symbol, doc):
-        "Make comparator method."
-        def comparer(self, other):
-            "Compare method for sorted list and sequence."
-            if not isinstance(other, Sequence):
-                return NotImplemented
-
-            self_len = self._len
-            len_other = len(other)
-
-            if self_len != len_other:
-                if seq_op is eq:
-                    return False
-                if seq_op is ne:
-                    return True
-
-            for alpha, beta in zip(self, other):
-                if alpha != beta:
-                    return seq_op(alpha, beta)
-
-            return seq_op(self_len, len_other)
-
-        seq_op_name = seq_op.__name__
-        comparer.__name__ = '__{0}__'.format(seq_op_name)
-        doc_str = """Return true if and only if sorted list is {0} `other`.
-
-        ``sl.__{1}__(other)`` <==> ``sl {2} other``
-
-        Comparisons use lexicographical order as with sequences.
-
-        Runtime complexity: `O(n)`
-
-        :param other: `other` sequence
-        :return: true if sorted list is {0} `other`
-
-        """
-        comparer.__doc__ = dedent(doc_str.format(doc, seq_op_name, symbol))
-        return comparer
-
-
-    __eq__ = __make_cmp(eq, '==', 'equal to')
-    __ne__ = __make_cmp(ne, '!=', 'not equal to')
-    __lt__ = __make_cmp(lt, '<', 'less than')
-    __gt__ = __make_cmp(gt, '>', 'greater than')
-    __le__ = __make_cmp(le, '<=', 'less than or equal to')
-    __ge__ = __make_cmp(ge, '>=', 'greater than or equal to')
-    __make_cmp = staticmethod(__make_cmp)  # type: ignore
+    __eq__ = _make_cmp(eq, '==', 'equal to')
+    __ne__ = _make_cmp(ne, '!=', 'not equal to')
+    __lt__ = _make_cmp(lt, '<', 'less than')
+    __gt__ = _make_cmp(gt, '>', 'greater than')
+    __le__ = _make_cmp(le, '<=', 'less than or equal to')
+    __ge__ = _make_cmp(ge, '>=', 'greater than or equal to')
+    __make_cmp = staticmethod(_make_cmp)  # type: ignore
 
 
     @recursive_repr()
@@ -1734,16 +1731,13 @@ class SortedKeyList(SortedList):
         if iterable is not None:
             self._update(iterable)
 
-
     def __new__(cls, iterable=None, key=identity):
         return object.__new__(cls)
-
 
     @property
     def key(self):
         "Function used to extract comparison key from values."
         return self._key
-
 
     def clear(self):
         """Remove all values from sorted-key list.
@@ -1759,8 +1753,7 @@ class SortedKeyList(SortedList):
 
     _clear = clear
 
-
-    def add(self, value):
+    def add(self, value: Any) -> None:
         """Add `value` to sorted-key list.
 
         Runtime complexity: `O(log(n))` -- approximate.
@@ -1981,8 +1974,7 @@ class SortedKeyList(SortedList):
                 len_sublist = len(_keys[pos])
                 idx = 0
 
-
-    def remove(self, value):
+    def remove(self, value: Any) -> None:
         """Remove `value` from sorted-key list; `value` must be a member.
 
         If `value` is not a member, raise ValueError.

@@ -22,6 +22,7 @@ from UM.Logger import Logger
 from UM.Preferences import Preferences
 from UM.View.Renderer import Renderer #For typing.
 from UM.OutputDevice.OutputDeviceManager import OutputDeviceManager
+from UM.Workspace.WorkspaceMetadataStorage import WorkspaceMetadataStorage
 from UM.i18n import i18nCatalog
 from UM.Version import Version
 
@@ -32,20 +33,24 @@ if TYPE_CHECKING:
     from UM.Extension import Extension
 
 
-##  Central object responsible for running the main event loop and creating other central objects.
-#
-#   The Application object is a central object for accessing other important objects. It is also
-#   responsible for starting the main event loop. It is passed on to plugins so it can be easily
-#   used to access objects required for those plugins.
 @signalemitter
 class Application:
-    ##  Init method
-    #
-    #   \param name \type{string} The name of the application.
-    #   \param version \type{string} Version, formatted as major.minor.rev
-    #   \param build_type Additional version info on the type of build this is, such as "master".
-    #   \param is_debug_mode Whether to run in debug mode.
+    """Central object responsible for running the main event loop and creating other central objects.
+
+    The Application object is a central object for accessing other important objects. It is also
+    responsible for starting the main event loop. It is passed on to plugins so it can be easily
+    used to access objects required for those plugins.
+    """
+
     def __init__(self, name: str, version: str, api_version: str, app_display_name: str = "", build_type: str = "", is_debug_mode: bool = False, **kwargs) -> None:
+        """Init method
+
+        :param name: :type{string} The name of the application.
+        :param version: :type{string} Version, formatted as major.minor.rev
+        :param build_type: Additional version info on the type of build this is, such as "master".
+        :param is_debug_mode: Whether to run in debug mode.
+        """
+
         if Application.__instance is not None:
             raise RuntimeError("Try to create singleton '%s' more than once" % self.__class__.__name__)
         Application.__instance = self
@@ -54,52 +59,59 @@ class Application:
 
         self._api_version = Version(api_version)  # type: Version
 
-        self._app_name = name #type: str
+        self._app_name = name  # type: str
         self._app_display_name = app_display_name if app_display_name else name  # type: str
-        self._version = version #type: str
-        self._build_type = build_type #type: str
-        self._is_debug_mode = is_debug_mode #type: bool
-        self._is_headless = False #type: bool
-        self._use_external_backend = False #type: bool
+        self._version = version  # type: str
+        self._build_type = build_type  # type: str
+        self._is_debug_mode = is_debug_mode  # type: bool
+        self._is_headless = False  # type: bool
+        self._use_external_backend = False  # type: bool
 
-        self._config_lock_filename = "{name}.lock".format(name = self._app_name) # type: str
+        self._just_updated_from_old_version = False  # type: bool
 
-        self._cli_args = None #type: argparse.Namespace
-        self._cli_parser = argparse.ArgumentParser(prog = self._app_name, add_help = False) #type: argparse.ArgumentParser
+        self._config_lock_filename = "{name}.lock".format(name = self._app_name)  # type: str
 
-        self._main_thread = threading.current_thread() #type: threading.Thread
+        self._cli_args = None  # type: argparse.Namespace
+        self._cli_parser = argparse.ArgumentParser(prog = self._app_name, add_help = False)  # type: argparse.ArgumentParser
 
-        self.default_theme = self._app_name  #type: str # Default theme is the application name
-        self._default_language = "en_US" #type: str
+        self._main_thread = threading.current_thread()  # type: threading.Thread
 
-        self.change_log_url = "https://github.com/Ultimaker/Uranium" # Where to find a more detailed description of the recent updates.
+        self.default_theme = self._app_name  # type: str # Default theme is the application name
+        self._default_language = "en_US"  # type: str
 
-        self._preferences_filename = None #type: str
-        self._preferences = None #type: Preferences
+        self.change_log_url = "https://github.com/Ultimaker/Uranium"  # Where to find a more detailed description of the recent updates.
 
-        self._extensions = [] #type: List[Extension]
-        self._required_plugins = [] #type: List[str]
+        self._preferences_filename = None  # type: str
+        self._preferences = None  # type: Preferences
+
+        self._extensions = []  # type: List[Extension]
+        self._required_plugins = []  # type: List[str]
 
         self._package_manager_class = PackageManager  # type: type
         self._package_manager = None  # type: PackageManager
 
-        self._plugin_registry = None #type: PluginRegistry
-        self._container_registry_class = ContainerRegistry #type: type
-        self._container_registry = None #type: ContainerRegistry
-        self._global_container_stack = None #type: ContainerStack
+        self._plugin_registry = None  # type: PluginRegistry
+        self._container_registry_class = ContainerRegistry  # type: type
+        self._container_registry = None  # type: ContainerRegistry
+        self._global_container_stack = None  # type: Optional[ContainerStack]
 
-        self._controller = None #type: Controller
-        self._backend = None #type: Backend
-        self._output_device_manager = None #type: OutputDeviceManager
-        self._operation_stack = None #type: OperationStack
+        self._controller = None  # type: Controller
+        self._backend = None  # type: Backend
+        self._output_device_manager = None  # type: OutputDeviceManager
+        self._operation_stack = None  # type: OperationStack
 
-        self._visible_messages = [] #type: List[Message]
-        self._message_lock = threading.Lock() #type: threading.Lock
+        self._visible_messages = []  # type: List[Message]
+        self._message_lock = threading.Lock()  # type: threading.Lock
 
-        self._app_install_dir = self.getInstallPrefix() #type: str
+        self._app_install_dir = self.getInstallPrefix()  # type: str
+
+        self._workspace_metadata_storage = WorkspaceMetadataStorage()  # type: WorkspaceMetadataStorage
 
     def getAPIVersion(self) -> "Version":
         return self._api_version
+
+    def getWorkspaceMetadataStorage(self) -> WorkspaceMetadataStorage:
+        return self._workspace_metadata_storage
 
     # Adds the command line options that can be parsed by the command line parser.
     # Can be overridden to add additional command line options to the parser.
@@ -129,6 +141,10 @@ class Application:
 
     # Performs initialization that must be done before start.
     def initialize(self) -> None:
+        Logger.log("d", "Initializing %s", self._app_display_name)
+        Logger.log("d", "App Version %s", self._version)
+        Logger.log("d", "Api Version %s", self._api_version)
+        Logger.log("d", "Build type %s", self._build_type or "None")
         # For Ubuntu Unity this makes Qt use its own menu bar rather than pass it on to Unity.
         os.putenv("UBUNTU_MENUPROXY", "0")
 
@@ -140,6 +156,9 @@ class Application:
         # after the __init__() has been called.
         Resources.ApplicationIdentifier = self._app_name
         Resources.ApplicationVersion = self._version
+
+        app_root = os.path.abspath(os.path.join(os.path.dirname(sys.executable)))
+        Resources.addSearchPath(os.path.join(app_root, "share", "uranium", "resources"))
 
         Resources.addSearchPath(os.path.join(os.path.dirname(sys.executable), "resources"))
         Resources.addSearchPath(os.path.join(self._app_install_dir, "share", "uranium", "resources"))
@@ -164,9 +183,12 @@ class Application:
         self._controller = Controller(self)
         self._output_device_manager = OutputDeviceManager()
 
-        self._operation_stack = OperationStack(self._controller) # type: OperationStack
+        self._operation_stack = OperationStack(self._controller)
 
-        self._plugin_registry = PluginRegistry(self)  #type: PluginRegistry
+        self._plugin_registry = PluginRegistry(self)
+
+        self._plugin_registry.addPluginLocation(os.path.join(app_root, "share", "uranium", "plugins"))
+        self._plugin_registry.addPluginLocation(os.path.join(app_root, "share", "cura", "plugins"))
 
         self._plugin_registry.addPluginLocation(os.path.join(self._app_install_dir, "lib", "uranium"))
         self._plugin_registry.addPluginLocation(os.path.join(self._app_install_dir, "lib64", "uranium"))
@@ -191,9 +213,6 @@ class Application:
         UM.Settings.InstanceContainer.setContainerRegistry(self._container_registry)
         UM.Settings.ContainerStack.setContainerRegistry(self._container_registry)
 
-        # Initialize the package manager to remove and install scheduled packages.
-        self._package_manager = self._package_manager_class(self)
-
         self.showMessageSignal.connect(self.showMessage)
         self.hideMessageSignal.connect(self.hideMessage)
 
@@ -203,10 +222,16 @@ class Application:
     def startPostSplashWindowPhase(self) -> None:
         pass
 
-    ##  Run the main event loop.
-    #   This method should be re-implemented by subclasses to start the main event loop.
-    #   \exception NotImplementedError
+    # Indicates if we have just updated from an older application version.
+    def hasJustUpdatedFromOldVersion(self) -> bool:
+        return self._just_updated_from_old_version
+
     def run(self):
+        """Run the main event loop.
+        This method should be re-implemented by subclasses to start the main event loop.
+        :exception NotImplementedError:
+        """
+
         self.addCommandLineOptions()
         self.parseCliOptions()
         self.initialize()
@@ -214,15 +239,16 @@ class Application:
         self.startSplashWindowPhase()
         self.startPostSplashWindowPhase()
 
-    def getContainerRegistry(self):
+    def getContainerRegistry(self) -> ContainerRegistry:
         return self._container_registry
 
-    ##  Get the lock filename
     def getApplicationLockFilename(self) -> str:
+        """Get the lock filename"""
+
         return self._config_lock_filename
 
-    ##  Emitted when the application window was closed and we need to shut down the application
     applicationShuttingDown = Signal()
+    """Emitted when the application window was closed and we need to shut down the application"""
 
     showMessageSignal = Signal()
 
@@ -232,7 +258,7 @@ class Application:
 
     workspaceLoaded = Signal()
 
-    def setGlobalContainerStack(self, stack: "ContainerStack") -> None:
+    def setGlobalContainerStack(self, stack: Optional["ContainerStack"]) -> None:
         if self._global_container_stack != stack:
             self._global_container_stack = stack
             self.globalContainerStackChanged.emit()
@@ -249,12 +275,14 @@ class Application:
     def showToastMessage(self, title: str, message: str) -> None:
         raise NotImplementedError
 
-    ##  Get the version of the application
     def getVersion(self) -> str:
+        """Get the version of the application"""
+
         return self._version
 
-    ##  Get the build type of the application
     def getBuildType(self) -> str:
+        """Get the build type of the application"""
+
         return self._build_type
 
     def getIsDebugMode(self) -> bool:
@@ -268,8 +296,9 @@ class Application:
 
     visibleMessageAdded = Signal()
 
-    ##  Hide message by ID (as provided by built-in id function)
     def hideMessageById(self, message_id: int) -> None:
+        """Hide message by ID (as provided by built-in id function)"""
+
         # If a user and the application tries to close same message dialog simultaneously, message_id could become an empty
         # string, and then the application will raise an error when trying to do "int(message_id)".
         # So we check the message_id here.
@@ -286,26 +315,32 @@ class Application:
 
     visibleMessageRemoved = Signal()
 
-    ##  Get list of all visible messages
     def getVisibleMessages(self) -> List[Message]:
+        """Get list of all visible messages"""
+
         with self._message_lock:
             return self._visible_messages
 
-    ##  Function that needs to be overridden by child classes with a list of plugins it needs.
     def _loadPlugins(self) -> None:
+        """Function that needs to be overridden by child classes with a list of plugins it needs."""
+
         pass
 
-    ##  Get name of the application.
-    #   \returns app_name \type{string}
     def getApplicationName(self) -> str:
+        """Get name of the application.
+        :returns: app_name
+        """
+
         return self._app_name
 
     def getApplicationDisplayName(self) -> str:
         return self._app_display_name
 
-    ##  Get the preferences.
-    #   \return preferences \type{Preferences}
     def getPreferences(self) -> Preferences:
+        """Get the preferences.
+        :return: preferences
+        """
+
         return self._preferences
 
     def savePreferences(self) -> None:
@@ -314,10 +349,12 @@ class Application:
         else:
             Logger.log("i", "Preferences filename not set. Unable to save file.")
 
-    ##  Get the currently used IETF language tag.
-    #   The returned tag is during runtime used to translate strings.
-    #   \returns Language tag.
     def getApplicationLanguage(self) -> str:
+        """Get the currently used IETF language tag.
+        The returned tag is during runtime used to translate strings.
+        :returns: Language tag.
+        """
+
         language = os.getenv("URANIUM_LANGUAGE")
         if not language:
             language = self._preferences.getValue("general/language")
@@ -328,33 +365,44 @@ class Application:
 
         return language
 
-    ##  Application has a list of plugins that it *must* have. If it does not have these, it cannot function.
-    #   These plugins can not be disabled in any way.
     def getRequiredPlugins(self) -> List[str]:
+        """Application has a list of plugins that it *must* have. If it does not have these, it cannot function.
+        These plugins can not be disabled in any way.
+        """
+
         return self._required_plugins
 
-    ##  Set the plugins that the application *must* have in order to function.
-    #   \param plugin_names \type{list} List of strings with the names of the required plugins
     def setRequiredPlugins(self, plugin_names: List[str]) -> None:
+        """Set the plugins that the application *must* have in order to function.
+        :param plugin_names: List of strings with the names of the required plugins
+        """
+
         self._required_plugins = plugin_names
 
-    ##  Set the backend of the application (the program that does the heavy lifting).
     def setBackend(self, backend: "Backend") -> None:
+        """Set the backend of the application (the program that does the heavy lifting)."""
+
         self._backend = backend
 
-    ##  Get the backend of the application (the program that does the heavy lifting).
-    #   \returns Backend \type{Backend}
     def getBackend(self) -> "Backend":
+        """Get the backend of the application (the program that does the heavy lifting).
+        :returns: Backend
+        """
+
         return self._backend
 
-    ##  Get the PluginRegistry of this application.
-    #   \returns PluginRegistry \type{PluginRegistry}
     def getPluginRegistry(self) -> PluginRegistry:
+        """Get the PluginRegistry of this application.
+        :returns: PluginRegistry
+        """
+
         return self._plugin_registry
 
-    ##  Get the Controller of this application.
-    #   \returns Controller \type{Controller}
     def getController(self) -> Controller:
+        """Get the Controller of this application.
+        :returns: Controller
+        """
+
         return self._controller
 
     def getOperationStack(self) -> OperationStack:
@@ -363,30 +411,37 @@ class Application:
     def getOutputDeviceManager(self) -> OutputDeviceManager:
         return self._output_device_manager
 
-    ##  Return an application-specific Renderer object.
-    #   \exception NotImplementedError
     def getRenderer(self) -> Renderer:
+        """Return an application-specific Renderer object.
+        :exception NotImplementedError
+        """
+
         raise NotImplementedError("getRenderer must be implemented by subclasses.")
 
-    ##  Post a function event onto the event loop.
-    #
-    #   This takes a CallFunctionEvent object and puts it into the actual event loop.
-    #   \exception NotImplementedError
     def functionEvent(self, event: CallFunctionEvent) -> None:
+        """Post a function event onto the event loop.
+
+        This takes a CallFunctionEvent object and puts it into the actual event loop.
+        :exception NotImplementedError
+        """
+
         raise NotImplementedError("functionEvent must be implemented by subclasses.")
 
-    ##  Call a function the next time the event loop runs.
-    #
-    #   You can't get the result of this function directly. It won't block.
-    #   \param function The function to call.
-    #   \param args The positional arguments to pass to the function.
-    #   \param kwargs The keyword arguments to pass to the function.
     def callLater(self, func: Callable[..., Any], *args, **kwargs) -> None:
+        """Call a function the next time the event loop runs.
+
+        You can't get the result of this function directly. It won't block.
+        :param func: The function to call.
+        :param args: The positional arguments to pass to the function.
+        :param kwargs: The keyword arguments to pass to the function.
+        """
+
         event = CallFunctionEvent(func, args, kwargs)
         self.functionEvent(event)
 
-    ##  Get the application's main thread.
     def getMainThread(self) -> threading.Thread:
+        """Get the application's main thread."""
+
         return self._main_thread
 
     def addExtension(self, extension: "Extension") -> None:
@@ -395,13 +450,19 @@ class Application:
     def getExtensions(self) -> List["Extension"]:
         return self._extensions
 
+    # Returns the path to the folder of the app itself, e.g.: '/root/blah/programs/Cura'.
     @staticmethod
-    def getInstallPrefix() -> str:
+    def getAppFolderPrefix() -> str:
         if "python" in os.path.basename(sys.executable):
             executable = sys.argv[0]
         else:
             executable = sys.executable
-        return os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(executable)), ".."))
+        return os.path.dirname(os.path.realpath(executable))
+
+    # Returns the path to the folder the app is installed _in_, e.g.: '/root/blah/programs'
+    @staticmethod
+    def getInstallPrefix() -> str:
+        return os.path.abspath(os.path.join(Application.getAppFolderPrefix(), ".."))
 
     __instance = None   # type: Application
 

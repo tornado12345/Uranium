@@ -1,24 +1,29 @@
-# Copyright (c) 2018 Ultimaker B.V.
+# Copyright (c) 2019 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 
 import imp
 import json
 import os
 import shutil  # For deleting plugin directories;
-import stat    # For setting file permissions correctly;
-import zipfile
+import stat  # For setting file permissions correctly;
+import time
 import types
+import zipfile
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
+from PyQt5.QtCore import QCoreApplication
 from PyQt5.QtCore import QObject, pyqtSlot, QUrl, pyqtProperty, pyqtSignal
 
-from UM.i18n import i18nCatalog
 from UM.Logger import Logger
+from UM.Message import Message
 from UM.Platform import Platform
 from UM.PluginError import PluginNotFoundError, InvalidMetaDataError
 from UM.PluginObject import PluginObject  # For type hinting
 from UM.Resources import Resources
+from UM.Trust import Trust, TrustBasics, TrustException
 from UM.Version import Version
+from UM.i18n import i18nCatalog
 
 i18n_catalog = i18nCatalog("uranium")
 
@@ -26,30 +31,35 @@ if TYPE_CHECKING:
     from UM.Application import Application
 
 
-##  A central object to dynamically load modules as plugins.
-#
-#   The PluginRegistry class can load modules dynamically and use
-#   them as plugins. Each plugin module is expected to be a directory with
-#   and `__init__` file defining a `getMetaData` and a `register` function.
-#
-#   For more details, see the [plugins] file.
-#
-#   [plugins]: docs/plugins.md
+plugin_path_ignore_list = ["__pycache__", "tests", ".git"]
+
 
 class PluginRegistry(QObject):
+    """A central object to dynamically load modules as plugins.
+
+    The PluginRegistry class can load modules dynamically and use
+    them as plugins. Each plugin module is expected to be a directory with
+    and `__init__` file defining a `getMetaData` and a `register` function.
+
+    For more details, see the [plugins] file.
+
+    [plugins]: docs/plugins.md
+    """
+
     def __init__(self, application: "Application", parent: QObject = None) -> None:
         if PluginRegistry.__instance is not None:
             raise RuntimeError("Try to create singleton '%s' more than once" % self.__class__.__name__)
         PluginRegistry.__instance = self
 
         super().__init__(parent)
+        self.preloaded_plugins = []  # type: List[str]  # List of plug-in names that must be loaded before the rest, if the plug-ins are available. They are loaded in this order too.
+
         self._application = application  # type: Application
         self._api_version = application.getAPIVersion()  # type: Version
 
         self._all_plugins = []        # type: List[str]
         self._metadata = {}           # type: Dict[str, Dict[str, Any]]
 
-        self._plugins_available = []  # type: List[str]
         self._plugins_installed = []  # type: List[str]
 
         # NOTE: The disabled_plugins and plugins_to_remove is explicitly set to None.
@@ -57,21 +67,38 @@ class PluginRegistry(QObject):
         # difference between no list and an empty one.
         self._disabled_plugins = []  # type: List[str]
         self._outdated_plugins = []  # type: List[str]
-        self._plugins_to_install = dict()  # type: Dict[str, dict]
+        self._plugins_to_install = dict()  # type: Dict[str, Dict[str, str]]
         self._plugins_to_remove = []  # type: List[str]
 
-        # Keep track of which plugins are 3rd-party
-        self._plugins_external = []   # type: List[str]
-
         self._plugins = {}            # type: Dict[str, types.ModuleType]
+        self._found_plugins = {}      # type: Dict[str, types.ModuleType]  # Cache to speed up _findPlugin
         self._plugin_objects = {}     # type: Dict[str, PluginObject]
 
         self._plugin_locations = []  # type: List[str]
-        self._folder_cache = {}      # type: Dict[str, List[Tuple[str, str]]]
+        self._plugin_folder_cache = {}  # type: Dict[str, List[Tuple[str, str]]]  # Cache to speed up _locatePlugin
 
         self._bundled_plugin_cache = {}  # type: Dict[str, bool]
 
         self._supported_file_types = {"umplugin": "Uranium Plugin"} # type: Dict[str, str]
+
+        self._check_if_trusted = False  # type: bool
+        self._clean_hierarchy_sent_messages = []  # type: List[str]
+        self._debug_mode = False  # type: bool
+        self._checked_plugin_ids = []     # type: List[str]
+        self._distrusted_plugin_ids = []  # type: List[str]
+        self._trust_checker = None  # type: Optional[Trust]
+
+    def setCheckIfTrusted(self, check_if_trusted: bool, debug_mode: bool = False) -> None:
+        self._check_if_trusted = check_if_trusted
+        if self._check_if_trusted:
+            self._trust_checker = Trust.getInstance()
+            # 'Trust.getInstance()' will raise an exception if anything goes wrong (e.g.: 'unable to read public key').
+            # Any such exception is explicitly _not_ caught here, as the application should quit with a crash.
+            if self._trust_checker:
+                self._trust_checker.setFollowSymlinks(debug_mode)
+
+    def getCheckIfTrusted(self) -> bool:
+        return self._check_if_trusted
 
     def initializeBeforePluginsAreLoaded(self) -> None:
         config_path = Resources.getConfigStoragePath()
@@ -122,7 +149,7 @@ class PluginRegistry(QObject):
         # Install the plugins that need to be installed (overwrite existing)
         for plugin_id, plugin_info in self._plugins_to_install.items():
             self._installPlugin(plugin_id, plugin_info["filename"])
-        self._plugins_to_install = dict()
+        self._plugins_to_install = {}
         self._savePluginData()
 
     def initializeAfterPluginsAreLoaded(self) -> None:
@@ -148,6 +175,60 @@ class PluginRegistry(QObject):
             # There is no need to crash the application for this, but it is a failure that we want to log.
             Logger.logException("e", "Unable to save the plugin data.")
 
+    def _isPathInLocation(self, location: str, path: str) -> bool:
+        try:
+            is_in_path = os.path.commonpath([location, path]).startswith(location)
+        except ValueError:
+            is_in_path = False
+        return is_in_path
+
+    def _verifyCleanHierarchy(self, abs_path: str) -> bool:
+        """ Only trust plugins if not checking or when there are no other files (not in the exceptions) in parent-root.
+        :param abs_path: The path to check for violations.
+        :return: True if the hierarchy of the abs_path and below can potentially be trusted.
+        """
+
+        # Don't check plugins if not in a 'security scenario'. Hobbyists must be able to tinker without signing.
+        if not self._check_if_trusted:
+            return True
+
+        install_prefix = os.path.abspath(self._application.getInstallPrefix())
+
+        # Put the parent-root on the work-list:
+        worklist = [abs_path]
+        while worklist:
+            current_dir = worklist.pop()
+
+            # If the directory under scrutiny is a signed folder or bundled, it's ok:
+            has_signature_file = os.path.isfile(os.path.join(current_dir, TrustBasics.getSignaturesLocalFilename()))
+            is_bundled = self._isPathInLocation(install_prefix, current_dir)
+            if has_signature_file or is_bundled:
+                continue
+
+            # Otherwise it's outside of the trusted area, and needs to be checked whether stray file/folder or plugin:
+            for file in os.listdir(current_dir):
+                abs_file = os.path.join(current_dir, file)
+
+                # If the file is a sub-folder, put it on the work-list to be investigated in a later iteration:
+                if os.path.isdir(abs_file):
+                    worklist.append(abs_file)
+
+                # Otherwise, the file can never have a valid signature associated with it, so message and abort:
+                else:
+                    Logger.error("Plugins in %s won't load: File that can't be verified: %s", abs_path, abs_file)
+                    if abs_path not in self._clean_hierarchy_sent_messages:
+                        self._clean_hierarchy_sent_messages.append(abs_path)
+                        message_text = i18n_catalog.i18nc("@error:untrusted",
+                                                          "Plugin {} was not loaded because it tried to load files outside of the trusted context",
+                                                          abs_path)
+                        # TODO: Message now has exactly the same string as for an unverified plugin, rather than a
+                        #       folder which contains other plugins, because of the string freeze in the current branch.
+                        Message(text=message_text).show()
+                    return False
+
+        # All is well:
+        return True
+
     # TODO:
     # - [ ] Improve how metadata is stored. It should not be in the 'plugin' prop
     #       of the dictionary item.
@@ -167,7 +248,10 @@ class PluginRegistry(QObject):
 
     #   Add a plugin location to the list of locations to search:
     def addPluginLocation(self, location: str) -> None:
-        #TODO: Add error checking!
+        if not os.path.isdir(location):
+            Logger.warning("Plugin location {0} must be a folder.".format(location))
+            return
+
         self._plugin_locations.append(location)
 
     #   Check if all required plugins are loaded:
@@ -199,10 +283,6 @@ class PluginRegistry(QObject):
                 plugin_list.append(plugin_id)
         return plugin_list
 
-    #   Get a list of available plugins (ones which are not yet installed):
-    def getAvailablePlugins(self) -> List[str]:
-        return self._plugins_available
-
     #   Get a list of all metadata matching a certain subset of metadata:
     #   \param kwargs Keyword arguments.
     #       Possible keywords:
@@ -224,9 +304,6 @@ class PluginRegistry(QObject):
     #   Get a list of disabled plugins:
     def getDisabledPlugins(self) -> List[str]:
         return self._disabled_plugins
-
-    def getExternalPlugins(self) -> List[str]:
-        return self._plugins_external
 
     #   Get a list of installed plugins:
     #   NOTE: These are plugins which have already been registered. This list is
@@ -254,7 +331,7 @@ class PluginRegistry(QObject):
 
         return self._metadata[plugin_id]
 
-    @pyqtSlot(str, result="QVariantMap")
+    @pyqtSlot(str, result = "QVariantMap")
     def installPlugin(self, plugin_path: str) -> Optional[Dict[str, str]]:
         plugin_path = QUrl(plugin_path).toLocalFile()
 
@@ -304,12 +381,15 @@ class PluginRegistry(QObject):
         # Go through all plugin locations and check if the given plugin is located in the installation path.
         is_bundled = False
         for plugin_dir in self._plugin_locations:
-            try:
-                is_in_installation_path = os.path.commonpath([install_prefix, plugin_dir]).startswith(install_prefix)
-            except ValueError:
-                is_in_installation_path = False
-            if not is_in_installation_path:
-                continue
+            if not self._isPathInLocation(install_prefix, plugin_dir):
+                # To prevent the situation in a 'trusted' env. that the user-folder has a supposedly 'bundled' plugin:
+                if self._check_if_trusted:
+                    result = self._locatePlugin(plugin_id, plugin_dir)
+                    if result:
+                        is_bundled = False
+                        break
+                else:
+                    continue
 
             result = self._locatePlugin(plugin_id, plugin_dir)
             if result:
@@ -318,16 +398,34 @@ class PluginRegistry(QObject):
         self._bundled_plugin_cache[plugin_id] = is_bundled
         return is_bundled
 
-    ##  Load all plugins matching a certain set of metadata
-    #   \param meta_data \type{dict} The meta data that needs to be matched.
-    #   \sa loadPlugin
-    #   NOTE: This is the method which kicks everything off at app launch.
     def loadPlugins(self, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """Load all plugins matching a certain set of metadata
+
+        :param metadata: The meta data that needs to be matched.
+        NOTE: This is the method which kicks everything off at app launch.
+        """
+
+        start_time = time.time()
+
+        # First load all of the pre-loaded plug-ins.
+        for preloaded_plugin in self.preloaded_plugins:
+            self.loadPlugin(preloaded_plugin)
+
         # Get a list of all installed plugins:
         plugin_ids = self._findInstalledPlugins()
         for plugin_id in plugin_ids:
+            if plugin_id in self.preloaded_plugins:
+                continue  # Already loaded this before.
+
             # Get the plugin metadata:
-            plugin_metadata = self.getMetaData(plugin_id)
+            try:
+                plugin_metadata = self.getMetaData(plugin_id)
+            except TrustException:
+                Logger.error("Plugin {} was not loaded because it could not be verified.", plugin_id)
+                message_text = i18n_catalog.i18nc("@error:untrusted",
+                                                  "Plugin {} was not loaded because it could not be verified.", plugin_id)
+                Message(text = message_text).show()
+                continue
 
             # Save all metadata to the metadata dictionary:
             self._metadata[plugin_id] = plugin_metadata
@@ -335,11 +433,13 @@ class PluginRegistry(QObject):
                 #
                 try:
                     self.loadPlugin(plugin_id)
+                    QCoreApplication.processEvents()  # Ensure that the GUI does not freeze.
                     # Add the plugin to the list after actually load the plugin:
                     self._all_plugins.append(plugin_id)
                     self._plugins_installed.append(plugin_id)
                 except PluginNotFoundError:
                     pass
+        Logger.log("d", "Loading all plugins took %s seconds", time.time() - start_time)
 
     # Checks if the given plugin API version is compatible with the current version.
     def isPluginApiVersionCompatible(self, plugin_api_version: "Version") -> bool:
@@ -353,7 +453,7 @@ class PluginRegistry(QObject):
             Logger.log("w", "Plugin %s was already loaded", plugin_id)
             return
 
-        # Find the actual plugin on drive:
+        # Find the actual plugin on drive, do security checks if necessary:
         plugin = self._findPlugin(plugin_id)
 
         # If not found, raise error:
@@ -389,26 +489,38 @@ class PluginRegistry(QObject):
         try:
             to_register = plugin.register(self._application)  # type: ignore  # We catch AttributeError on this in case register() doesn't exist.
             if not to_register:
-                Logger.log("e", "Plugin %s did not return any objects to register", plugin_id)
+                Logger.log("w", "Plugin %s did not return any objects to register", plugin_id)
                 return
             for plugin_type, plugin_object in to_register.items():
                 if type(plugin_object) == list:
-                    for nested_plugin_object in plugin_object:
+                    for metadata_index, nested_plugin_object in enumerate(plugin_object):
                         nested_plugin_object.setVersion(self._metadata[plugin_id].get("plugin", {}).get("version"))
+                        all_metadata = self._metadata[plugin_id].get(plugin_type, [])
+                        try:
+                            nested_plugin_object.setMetaData(all_metadata[metadata_index])
+                        except IndexError:
+                            nested_plugin_object.setMetaData({})
                         self._addPluginObject(nested_plugin_object, plugin_id, plugin_type)
                 else:
                     plugin_object.setVersion(self._metadata[plugin_id].get("plugin", {}).get("version"))
+                    metadata = self._metadata[plugin_id].get(plugin_type, {})
+                    if type(metadata) == list:
+                        try:
+                            metadata = metadata[0]
+                        except IndexError:
+                            metadata = {}
+                    plugin_object.setMetaData(metadata)
                     self._addPluginObject(plugin_object, plugin_id, plugin_type)
 
             self._plugins[plugin_id] = plugin
             self.enablePlugin(plugin_id)
-            Logger.log("i", "Loaded plugin %s", plugin_id)
+            Logger.info("Loaded plugin %s", plugin_id)
 
         except Exception as ex:
             Logger.logException("e", "Error loading plugin %s:", plugin_id)
 
     #   Uninstall a plugin with a given ID:
-    @pyqtSlot(str, result="QVariantMap")
+    @pyqtSlot(str, result = "QVariantMap")
     def uninstallPlugin(self, plugin_id: str) -> Dict[str, str]:
         result = {"status": "error", "message": "", "id": plugin_id}
         success_message = i18n_catalog.i18nc("@info:status", "The plugin has been removed.\nPlease restart {0} to finish uninstall.", self._application.getApplicationName())
@@ -503,25 +615,36 @@ class PluginRegistry(QObject):
             paths = self._plugin_locations
 
         for folder in paths:
-            if not os.path.isdir(folder):
-                continue
+            try:
+                if not os.path.isdir(folder):
+                    continue
 
-            for file in os.listdir(folder):
-                filepath = os.path.join(folder, file)
-                if os.path.isdir(filepath):
-                    if os.path.isfile(os.path.join(filepath, "__init__.py")):
-                        plugin_ids.append(file)
-                    else:
-                        plugin_ids += self._findInstalledPlugins([filepath])
+                for file in os.listdir(folder):
+                    filepath = os.path.join(folder, file)
+                    if os.path.isdir(filepath):
+                        if os.path.isfile(os.path.join(filepath, "__init__.py")):
+                            plugin_ids.append(file)
+                        else:
+                            plugin_ids += self._findInstalledPlugins([filepath])
+            except EnvironmentError as err:
+                Logger.warning("Unable to read folder {folder}: {err}".format(folder = folder, err = err))
+                continue
 
         return plugin_ids
 
-    ##  Try to find a module implementing a plugin
-    #   \param plugin_id The name of the plugin to find
-    #   \returns module if it was found None otherwise
     def _findPlugin(self, plugin_id: str) -> Optional[types.ModuleType]:
+        """Try to find a module implementing a plugin
+
+        :param plugin_id: The name of the plugin to find
+        :returns: module if it was found (and, if 'self._check_if_trusted' is set, also secure), None otherwise
+        """
+
+        if plugin_id in self._found_plugins:
+            return self._found_plugins[plugin_id]
         location = None
         for folder in self._plugin_locations:
+            if not self._verifyCleanHierarchy(folder):
+                continue
             location = self._locatePlugin(plugin_id, folder)
             if location:
                 break
@@ -535,6 +658,21 @@ class PluginRegistry(QObject):
             Logger.logException("e", "Import error when importing %s", plugin_id)
             return None
 
+        # Define a trusted plugin as either: already checked, correctly signed, or bundled with the application.
+        if self._check_if_trusted and plugin_id not in self._checked_plugin_ids and not self.isBundledPlugin(plugin_id):
+
+            # NOTE: '__pychache__'s (+ subfolders) are deleted on startup _before_ load module:
+            if not TrustBasics.removeCached(path):
+                self._distrusted_plugin_ids.append(plugin_id)
+                return None
+
+            # Do the actual check:
+            if self._trust_checker is not None and self._trust_checker.signedFolderCheck(path):
+                self._checked_plugin_ids.append(plugin_id)
+            else:
+                self._distrusted_plugin_ids.append(plugin_id)
+                return None
+
         try:
             module = imp.load_module(plugin_id, file, path, desc) #type: ignore #MyPy gets the wrong output type from imp.find_module for some reason.
         except Exception:
@@ -543,29 +681,28 @@ class PluginRegistry(QObject):
         finally:
             if file:
                 os.close(file) #type: ignore #MyPy gets the wrong output type from imp.find_module for some reason.
-
+        self._found_plugins[plugin_id] = module
         return module
 
     def _locatePlugin(self, plugin_id: str, folder: str) -> Optional[str]:
         if not os.path.isdir(folder):
             return None
 
-        if folder not in self._folder_cache:
-            sub_folders = []
-            for file in os.listdir(folder):
-                file_path = os.path.join(folder, file)
-                if os.path.isdir(file_path):
-                    entry = (file, file_path)
-                    sub_folders.append(entry)
-            self._folder_cache[folder] = sub_folders
+        # self._plugin_folder_cache is a per-plugin-location list of all subfolders that contain a __init__.py file
+        if folder not in self._plugin_folder_cache:
+            plugin_folders = []
+            for root, dirs, files in os.walk(folder, topdown = True, followlinks = True):
+                # modify dirs in place to ignore .git, pycache and test folders completely
+                dirs[:] = [d for d in dirs if d not in plugin_path_ignore_list]
 
-        for file, file_path in self._folder_cache[folder]:
-            if file == plugin_id and os.path.exists(os.path.join(file_path, "__init__.py")):
-                return folder
-            else:
-                plugin_path = self._locatePlugin(plugin_id, file_path)
-                if plugin_path:
-                    return plugin_path
+                if "plugin.json" in files:
+                    plugin_folders.append((root, os.path.basename(root)))
+
+            self._plugin_folder_cache[folder] = plugin_folders
+
+        for folder_path, folder_name in self._plugin_folder_cache[folder]:
+            if folder_name == plugin_id:
+                return os.path.abspath(os.path.join(folder_path, ".."))
 
         return None
 
@@ -604,11 +741,9 @@ class PluginRegistry(QObject):
             if "description" in meta_data["plugin"]:
                 meta_data["plugin"]["description"] = i18n_catalog.i18n(meta_data["plugin"]["description"])
 
-    ##  private:
-    #   Populate the list of metadata
-    #   \param plugin_id \type{string}
-    #   \return
     def _populateMetaData(self, plugin_id: str) -> bool:
+        """Populate the list of metadata"""
+
         plugin = self._findPlugin(plugin_id)
         if not plugin:
             Logger.log("w", "Could not find plugin %s", plugin_id)
@@ -627,7 +762,6 @@ class PluginRegistry(QObject):
 
         try:
             meta_data = plugin.getMetaData() #type: ignore #We catch the AttributeError that this would raise if the module has no getMetaData function.
-
             metadata_file = os.path.join(location, "plugin.json")
             try:
                 with open(metadata_file, "r", encoding = "utf-8") as file_stream:
@@ -635,9 +769,18 @@ class PluginRegistry(QObject):
             except FileNotFoundError:
                 Logger.logException("e", "Unable to find the required plugin.json file for plugin %s", plugin_id)
                 raise InvalidMetaDataError(plugin_id)
+            except UnicodeDecodeError:
+                Logger.logException("e", "The plug-in metadata file for plug-in {plugin_id} is corrupt.".format(plugin_id = plugin_id))
+                raise InvalidMetaDataError(plugin_id)
+            except EnvironmentError as e:
+                Logger.logException("e", "Can't open the metadata file for plug-in {plugin_id}: {err}".format(plugin_id = plugin_id, err = str(e)))
+                raise InvalidMetaDataError(plugin_id)
 
         except AttributeError as e:
-            Logger.log("e", "An error occurred getting metadata from plugin %s: %s", plugin_id, str(e))
+            Logger.log("e", "Plug-in {plugin_id} has no getMetaData function to get metadata of the plug-in: {err}".format(plugin_id = plugin_id, err = str(e)))
+            raise InvalidMetaDataError(plugin_id)
+        except TypeError as e:
+            Logger.log("e", "Plug-in {plugin_id} has a getMetaData function with the wrong signature: {err}".format(plugin_id = plugin_id, err = str(e)))
             raise InvalidMetaDataError(plugin_id)
 
         if not meta_data:
@@ -658,7 +801,7 @@ class PluginRegistry(QObject):
     #   Check if a certain dictionary contains a certain subset of key/value pairs
     #   \param dictionary \type{dict} The dictionary to search
     #   \param subset \type{dict} The subset to search for
-    def _subsetInDict(self, dictionary: Dict, subset: Dict) -> bool:
+    def _subsetInDict(self, dictionary: Dict[Any, Any], subset: Dict[Any, Any]) -> bool:
         for key in subset:
             if key not in dictionary:
                 return False
@@ -666,9 +809,12 @@ class PluginRegistry(QObject):
                 return False
         return True
 
-    ##  Get a speficic plugin object given an ID. If not loaded, load it.
-    #   \param plugin_id \type{string} The ID of the plugin object to get.
     def getPluginObject(self, plugin_id: str) -> PluginObject:
+        """Get a specific plugin object given an ID. If not loaded, load it.
+
+        :param plugin_id: The ID of the plugin object to get.
+        """
+
         if plugin_id not in self._plugins:
             self.loadPlugin(plugin_id)
         if plugin_id not in self._plugin_objects:
@@ -709,11 +855,13 @@ class PluginRegistry(QObject):
         file_types.append(i18n_catalog.i18nc("@item:inlistbox", "All Files (*)"))
         return file_types
 
-    ##  Get the path to a plugin.
-    #
-    #   \param plugin_id \type{string} The ID of the plugin.
-    #   \return \type{string} The absolute path to the plugin or an empty string if the plugin could not be found.
     def getPluginPath(self, plugin_id: str) -> Optional[str]:
+        """Get the path to a plugin.
+
+        :param plugin_id: The PluginObject.getPluginId() of the plugin.
+        :return: The absolute path to the plugin or an empty string if the plugin could not be found.
+        """
+
         if plugin_id in self._plugins:
             plugin = self._plugins.get(plugin_id)
         else:
@@ -728,29 +876,33 @@ class PluginRegistry(QObject):
 
         return None
 
-    ##  Add a new plugin type.
-    #
-    #   This function is used to add new plugin types. Plugin types are simple
-    #   string identifiers that match a certain plugin to a registration function.
-    #
-    #   The callable `register_function` is responsible for handling the object.
-    #   Usually it will add the object to a list of objects in the relevant class.
-    #   For example, the plugin type 'tool' has Controller::addTool as register
-    #   function.
-    #
-    #   `register_function` will be called every time a plugin of `type` is loaded.
-    #
-    #   \param type \type{string} The name of the plugin type to add.
-    #   \param register_function \type{callable} A callable that takes an object as parameter.
     @classmethod
     def addType(cls, plugin_type: str, register_function: Callable[[Any], None]) -> None:
+        """Add a new plugin type.
+
+        This function is used to add new plugin types. Plugin types are simple
+        string identifiers that match a certain plugin to a registration function.
+
+        The callable `register_function` is responsible for handling the object.
+        Usually it will add the object to a list of objects in the relevant class.
+        For example, the plugin type 'tool' has Controller::addTool as register
+        function.
+
+        `register_function` will be called every time a plugin of `type` is loaded.
+
+        :param plugin_type: The name of the plugin type to add.
+        :param register_function: A callable that takes an object as parameter.
+        """
+
         cls._type_register_map[plugin_type] = register_function
 
-    ##  Remove a plugin type.
-    #
-    #   \param type The plugin type to remove.
     @classmethod
     def removeType(cls, plugin_type: str) -> None:
+        """Remove a plugin type.
+
+        :param plugin_type: The plugin type to remove.
+        """
+
         if plugin_type in cls._type_register_map:
             del cls._type_register_map[plugin_type]
 

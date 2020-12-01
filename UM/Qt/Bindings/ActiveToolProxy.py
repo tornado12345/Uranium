@@ -12,15 +12,17 @@ from . import ContainerProxy
 
 import os.path
 
+
 class ActiveToolProxy(QObject):
     def __init__(self, parent = None):
         super().__init__(parent)
 
         self._active_tool = None
+        self._properties = {}
         Application.getInstance().getController().activeToolChanged.connect(self._onActiveToolChanged)
         self._onActiveToolChanged()
 
-        self._properties = { }
+
         self._properties_proxy = ContainerProxy.ContainerProxy(self._properties)
 
     activeToolChanged = pyqtSignal()
@@ -33,9 +35,8 @@ class ActiveToolProxy(QObject):
     def activeToolPanel(self):
         if not self._active_tool:
             return QUrl()
-
         try:
-            panel_file = PluginRegistry.getInstance().getMetaData(self._active_tool.getPluginId())["tool"]["tool_panel"]
+            panel_file = self._active_tool.getMetaData()["tool_panel"]
         except KeyError:
             return QUrl()
 
@@ -53,15 +54,16 @@ class ActiveToolProxy(QObject):
         if action:
             action()
 
-    ##  Triggers one of the tools' actions and provides additional parameters to
-    #   the action.
-    #
-    #   The additional data is passed as a parameter to the function call of the
-    #   action.
-    #   \param action The action to trigger.
-    #   \param data The additional data to call
     @pyqtSlot(str, QVariant)
     def triggerActionWithData(self, action: str, data: Any):
+        """Triggers one of the tools' actions and provides additional parameters to the action.
+
+        The additional data is passed as a parameter to the function call of the
+        action.
+        :param action: The action to trigger.
+        :param data: The additional data to call
+        """
+
         if not self._active_tool:
             return
         if not hasattr(self._active_tool, action):

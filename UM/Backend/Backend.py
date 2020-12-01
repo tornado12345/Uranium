@@ -19,8 +19,9 @@ from UM.Platform import Platform
 import Arcus
 
 
-##  The current processing state of the backend.
 class BackendState(IntEnum):
+    """The current processing state of the backend."""
+
     NotStarted = 1
     Processing = 2
     Done = 3
@@ -28,11 +29,13 @@ class BackendState(IntEnum):
     Disabled = 5
 
 
-##      Base class for any backend communication (separate piece of software).
-#       It makes use of the Socket class from libArcus for the actual communication bits.
-#       The message_handlers dict should be filled with string (full name of proto message), function pairs.
 @signalemitter
 class Backend(PluginObject):
+    """Base class for any backend communication (separate piece of software).
+    It makes use of the Socket class from libArcus for the actual communication bits.
+    The message_handlers dict should be filled with string (full name of proto message), function pairs.
+    """
+
     def __init__(self):
         super().__init__()  # Call super to make multiple inheritance work.
         self._supported_commands = {}
@@ -59,9 +62,11 @@ class Backend(PluginObject):
             self._backend_state = new_state
             self.backendStateChange.emit(self._backend_state)
 
-    ##   \brief Start the backend / engine.
-    #   Runs the engine, this is only called when the socket is fully opened & ready to accept connections
     def startEngine(self):
+        """:brief Start the backend / engine.
+        Runs the engine, this is only called when the socket is fully opened & ready to accept connections
+        """
+
         command = self.getEngineCommand()
         if not command:
             self._createSocket()
@@ -72,7 +77,11 @@ class Backend(PluginObject):
 
         # Double check that the old process is indeed killed.
         if self._process is not None:
-            self._process.terminate()
+            try:
+                self._process.terminate()
+            except PermissionError:
+                Logger.log("e", "Unable to kill running engine. Access is denied.")
+                return
             Logger.log("d", "Engine process is killed. Received return code %s", self._process.wait())
 
         self._process = self._runEngineProcess(command)
@@ -80,10 +89,10 @@ class Backend(PluginObject):
             return
         Logger.log("i", "Started engine process: %s", self.getEngineCommand()[0])
         self._backendLog(bytes("Calling engine with: %s\n" % self.getEngineCommand(), "utf-8"))
-        t = threading.Thread(target = self._storeOutputToLogThread, args = (self._process.stdout,))
+        t = threading.Thread(target = self._storeOutputToLogThread, args = (self._process.stdout,), name = "EngineOutputThread")
         t.daemon = True
         t.start()
-        t = threading.Thread(target = self._storeStderrToLogThread, args = (self._process.stderr,))
+        t = threading.Thread(target = self._storeStderrToLogThread, args = (self._process.stderr,), name = "EngineErrorThread")
         t.daemon = True
         t.start()
 
@@ -101,20 +110,22 @@ class Backend(PluginObject):
         Logger.log("d", "[Backend] " + line_str.strip())
         self._backend_log.append(line)
 
-    ##  Get the logging messages of the backend connection.
-    #   \returns  
     def getLog(self):
+        """Get the logging messages of the backend connection."""
+
         if self._backend_log_max_lines and type(self._backend_log_max_lines) == int:
             while len(self._backend_log) >= self._backend_log_max_lines:
                 del(self._backend_log[0])
         return self._backend_log
-    
-    ##  Get the command used to start the backend executable 
+
     def getEngineCommand(self):
+        """Get the command used to start the backend executable """
+
         return [UM.Application.Application.getInstance().getPreferences().getValue("backend/location"), "--port", str(self._socket.getPort())]
 
-    ##  Start the (external) backend process.
     def _runEngineProcess(self, command_list) -> Optional[subprocess.Popen]:
+        """Start the (external) backend process."""
+
         kwargs = {} #type: Dict[str, Any]
         if sys.platform == "win32":
             su = subprocess.STARTUPINFO()
@@ -123,18 +134,26 @@ class Backend(PluginObject):
             kwargs["startupinfo"] = su
             kwargs["creationflags"] = 0x00004000  # BELOW_NORMAL_PRIORITY_CLASS
         try:
-            return subprocess.Popen(command_list, stdin = subprocess.DEVNULL, stdout = subprocess.PIPE, stderr = subprocess.PIPE, **kwargs)
+            # STDIN needs to be None because we provide no input, but communicate via a local socket instead. The NUL device sometimes doesn't exist on some computers.
+            # STDOUT and STDERR need to be pipes because we'd like to log the output on those channels into the application log.
+            return subprocess.Popen(command_list, stdin = None, stdout = subprocess.PIPE, stderr = subprocess.PIPE, **kwargs)
         except PermissionError:
             Logger.log("e", "Couldn't start back-end: No permission to execute process.")
         except FileNotFoundError:
             Logger.logException("e", "Unable to find backend executable: %s", command_list[0])
         except BlockingIOError:
             Logger.log("e", "Couldn't start back-end: Resource is temporarily unavailable")
+        except OSError as e:
+            Logger.log("e", "Couldn't start back-end: Operating system is blocking it (antivirus?): {err}".format(err = str(e)))
         return None
 
     def _storeOutputToLogThread(self, handle):
         while True:
-            line = handle.readline()
+            try:
+                line = handle.readline()
+            except OSError:
+                Logger.logException("w", "Exception handling stdout log from backend.")
+                continue
             if line == b"":
                 self.backendQuit.emit()
                 break
@@ -142,13 +161,18 @@ class Backend(PluginObject):
 
     def _storeStderrToLogThread(self, handle):
         while True:
-            line = handle.readline()
+            try:
+                line = handle.readline()
+            except OSError:
+                Logger.logException("w", "Exception handling stderr log from backend.")
+                continue
             if line == b"":
                 break
             self._backendLog(line)
 
-    ##  Private socket state changed handler.
     def _onSocketStateChanged(self, state):
+        """Private socket state changed handler."""
+
         self._logSocketState(state)
         if state == Arcus.SocketState.Listening:
             if not UM.Application.Application.getInstance().getUseExternalBackend():
@@ -157,8 +181,9 @@ class Backend(PluginObject):
             Logger.log("d", "Backend connected on port %s", self._port)
             self.backendConnected.emit()
 
-    ## Debug function created to provide more info for CURA-2127
     def _logSocketState(self, state):
+        """Debug function created to provide more info for CURA-2127"""
+
         if state == Arcus.SocketState.Listening:
             Logger.log("d", "Socket state changed to Listening")
         elif state == Arcus.SocketState.Connecting:
@@ -172,8 +197,9 @@ class Backend(PluginObject):
         elif state == Arcus.SocketState.Closed:
             Logger.log("d", "Socket state changed to Closed")
 
-    ##  Private message handler
     def _onMessageReceived(self):
+        """Private message handler"""
+
         message = self._socket.takeNextMessage()
 
         if message.getTypeName() not in self._message_handlers:
@@ -181,9 +207,10 @@ class Backend(PluginObject):
             return
 
         self._message_handlers[message.getTypeName()](message)
-    
-    ##  Private socket error handler   
+
     def _onSocketError(self, error):
+        """Private socket error handler"""
+
         if error.getErrorCode() == Arcus.ErrorCode.BindFailedError:
             self._port += 1
             Logger.log("d", "Socket was unable to bind to port, increasing port number to %s", self._port)
@@ -197,8 +224,9 @@ class Backend(PluginObject):
 
         self._createSocket()
 
-    ##  Creates a socket and attaches listeners.
     def _createSocket(self, protocol_file):
+        """Creates a socket and attaches listeners."""
+
         if self._socket:
             Logger.log("d", "Previous socket existed. Closing that first.") # temp debug logging
             self._socket.stateChanged.disconnect(self._onSocketStateChanged)
@@ -215,7 +243,7 @@ class Backend(PluginObject):
         self._socket.stateChanged.connect(self._onSocketStateChanged)
         self._socket.messageReceived.connect(self._onMessageReceived)
         self._socket.error.connect(self._onSocketError)
-        
+
         if Platform.isWindows():
             # On Windows, the Protobuf DiskSourceTree does stupid things with paths.
             # So convert to forward slashes here so it finds the proto file properly.

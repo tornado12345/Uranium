@@ -6,9 +6,10 @@ import Arcus
 from UM.Signal import Signal, signalemitter
 
 
-##  A small extension of an Arcus socket that emits queued signals when socket events happen.
 @signalemitter
 class SignalSocket(Arcus.Socket):
+    """A small extension of an Arcus socket that emits queued signals when socket events happen."""
+
     def __init__(self):
         super().__init__()
 
@@ -47,7 +48,7 @@ class _SocketListener(Arcus.SocketListener):
             # For some reason, every so often, it seems to feel that the attribute stateChangedCallback doesn't exist.
             # Ignoring this prevents crashes.
             pass
-        
+
     def messageReceived(self):
         if self.messageReceivedCallback:
             self.messageReceivedCallback()

@@ -1,4 +1,4 @@
-# Copyright (c) 2018 Ultimaker B.V.
+# Copyright (c) 2020 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 
 import datetime
@@ -7,10 +7,13 @@ import os.path
 import re
 import shutil
 import tempfile
-from typing import Dict, Generator, List, Optional, cast
+import time  # To reduce chance of concurrency issues when deleting files if the OS is slow to register whether a file exists or not.
+from typing import Dict, Generator, List, Optional, Union, cast
 
 from UM.Logger import Logger
 from UM.Platform import Platform
+from UM.Version import Version
+
 
 class ResourceTypeError(Exception):
     pass
@@ -20,55 +23,60 @@ class UnsupportedStorageTypeError(Exception):
     pass
 
 
-##  Class to look up any form of resource used by Uranium or an application using Uranium
 class Resources:
-    ## The main resources location. Equal to $resource_search_path/resources.
-    Resources = 1
-    ## Location of preference configuration files. Actual location depends on platform.
-    Preferences = 2
-    ## Location of meshes. Equal to $resources/meshes.
-    Meshes = 3
-    ## Location of shaders. Equal to $resources/shaders.
-    Shaders = 4
-    ## Location of translation files. Equal to $resources/i18n.
-    i18n = 5
-    ## Location of images not in the theme. Equal to $resources/images.
-    Images = 6
-    ## Location of themes. Equal to $resources/themes.
-    Themes = 7
-    ## Location of definition container files. Equal to $resources/definitions
-    DefinitionContainers = 8
-    ## Location of instance container files. Equal to $resources/instances
-    InstanceContainers = 9
-    ## Location of container stack files. Equal to $resources/stacks
-    ContainerStacks = 10
-    ## Location of cached data
-    Cache = 11
-    ## Location of plugins
-    Plugins = 12
-    ## Location of data regarding bundled packages
-    BundledPackages = 13
+    """Class to look up any form of resource used by Uranium or an application using Uranium"""
 
-    ## Any custom resource types should be greater than this to prevent collisions with standard types.
+    Resources = 1
+    """The main resources location. Equal to $resource_search_path/resources."""
+    Preferences = 2
+    """Location of preference configuration files. Actual location depends on platform."""
+    Meshes = 3
+    """Location of meshes. Equal to $resources/meshes."""
+    Shaders = 4
+    """Location of shaders. Equal to $resources/shaders."""
+    i18n = 5
+    """Location of translation files. Equal to $resources/i18n."""
+    Images = 6
+    """Location of images not in the theme. Equal to $resources/images."""
+    Themes = 7
+    """Location of themes. Equal to $resources/themes."""
+    DefinitionContainers = 8
+    """Location of definition container files. Equal to $resources/definitions"""
+    InstanceContainers = 9
+    """Location of instance container files. Equal to $resources/instances"""
+    ContainerStacks = 10
+    """Location of container stack files. Equal to $resources/stacks"""
+    Cache = 11
+    """Location of cached data"""
+    Plugins = 12
+    """Location of plugins"""
+    BundledPackages = 13
+    """Location of data regarding bundled packages"""
+    Texts = 14
+    """Location of text files"""
+
     UserType = 128
+    """Any custom resource types should be greater than this to prevent collisions with standard types."""
 
     ApplicationIdentifier = "UM"
     ApplicationVersion = "unknown"
 
     __bundled_resources_path = None #type: Optional[str]
 
-    ##  Get the path to a certain resource file
-    #
-    #   \param resource_type \type{int} The type of resource to retrieve a path for.
-    #   \param args Arguments that are appended to the location to locate the correct file.
-    #
-    #   \return An absolute path to a file.
-    #           If a file exists in any storage path, it is returned without searching other paths.
-    #           If multiple files are found the first found is returned.
-    #
-    #   \exception FileNotFoundError Raised when the file could not be found.
     @classmethod
     def getPath(cls, resource_type: int, *args) -> str:
+        """Get the path to a certain resource file
+
+        :param resource_type: :type{int} The type of resource to retrieve a path for.
+        :param args: Arguments that are appended to the location to locate the correct file.
+
+        :return: An absolute path to a file.
+            If a file exists in any storage path, it is returned without searching other paths.
+            If multiple files are found the first found is returned.
+
+        :exception FileNotFoundError: Raised when the file could not be found.
+        """
+
         try:
             path = cls.getStoragePath(resource_type, *args)
             if os.path.exists(path):
@@ -82,13 +90,15 @@ class Resources:
 
         raise FileNotFoundError("Could not find resource {0} in {1}".format(args, resource_type))
 
-    ##  Get a list of paths to all resources of a certain resource type.
-    #
-    #   \param resource_type The resource type to get the paths for.
-    #
-    #   \return A list of absolute paths to resources of the specified type.
     @classmethod
     def getAllResourcesOfType(cls, resource_type: int) -> List[str]:
+        """Get a list of paths to all resources of a certain resource type.
+
+        :param resource_type: The resource type to get the paths for.
+
+        :return: A list of absolute paths to resources of the specified type.
+        """
+
         files = {} #type: Dict[str, List[str]]
         search_dirs = cls.getAllPathsForType(resource_type)
 
@@ -112,26 +122,30 @@ class Resources:
 
         return result
 
-    ##  Get the path that can be used to write a certain resource file.
-    #
-    #   \param resource_type The type of resource to retrieve a path for.
-    #   \param args Arguments that are appended to the location for the correct path.
-    #
-    #   \return A path that can be used to write the file.
-    #
-    #   \note This method does not check whether a given file exists.
     @classmethod
     def getStoragePath(cls, resource_type: int, *args) -> str:
+        """Get the path that can be used to write a certain resource file.
+
+        :param resource_type: The type of resource to retrieve a path for.
+        :param args: Arguments that are appended to the location for the correct path.
+
+        :return: A path that can be used to write the file.
+
+        :note This method does not check whether a given file exists.
+        """
+
         return os.path.join(cls.getStoragePathForType(resource_type), *args)
 
-    ##  Return a list of paths for a certain resource type.
-    #
-    #   \param resource_type \type{int} The type of resource to retrieve.
-    #   \return \type{list} A list of absolute paths where the resource type can be found.
-    #
-    #   \exception TypeError Raised when type is an unknown value.
     @classmethod
     def getAllPathsForType(cls, resource_type: int) -> List[str]:
+        """Return a list of paths for a certain resource type.
+
+        :param resource_type: The type of resource to retrieve.
+        :return: A list of absolute paths where the resource type can be found.
+
+        :exception TypeError Raised when type is an unknown value.
+        """
+
         if resource_type not in cls.__types:
             raise ResourceTypeError("Unknown type {0}".format(resource_type))
 
@@ -147,21 +161,22 @@ class Resources:
 
         return list(paths)
 
-    ##  Return a path where a certain resource type can be stored.
-    #
-    #   \param type The type of resource to store.
-    #   \return An absolute path where the given resource type can be stored.
-    #
-    #   \exception UnsupportedStorageTypeError Raised when writing type is not supported.
     @classmethod
     def getStoragePathForType(cls, resource_type: int) -> str:
+        """Return a path where a certain resource type can be stored.
+
+        :param type: The type of resource to store.
+        :return: An absolute path where the given resource type can be stored.
+
+        :exception UnsupportedStorageTypeError Raised when writing type is not supported.
+        """
+
         if resource_type not in cls.__types_storage:
             raise UnsupportedStorageTypeError("Unknown storage type {0}".format(resource_type))
 
         if cls.__config_storage_path is None or cls.__data_storage_path is None:
             cls.__initializeStoragePaths()
 
-        path = None
         # Special casing for Linux, since configuration should be stored in ~/.config but data should be stored in ~/.local/share
         if resource_type == cls.Preferences:
             path = cls.__config_storage_path
@@ -178,26 +193,31 @@ class Resources:
 
         return path
 
-    ##  Add a path relative to which resources should be searched for.
-    #
-    #   \param path The path to add.
     @classmethod
     def addSearchPath(cls, path: str) -> None:
+        """Add a path relative to which resources should be searched for.
+
+        :param path: The path to add.
+        """
+
         if os.path.isdir(path) and path not in cls.__paths:
             cls.__paths.append(path)
 
-    ##  Remove a resource search path.
     @classmethod
     def removeSearchPath(cls, path: str) -> None:
+        """Remove a resource search path."""
+
         if path in cls.__paths:
             del cls.__paths[cls.__paths.index(path)]
 
-    ##  Add a custom resource type that can be located.
-    #
-    #   \param type \type{int} An integer that can be used to identify the type. Should be greater than UserType.
-    #   \param path \type{string} The path relative to the search paths where resources of this type can be found./
     @classmethod
     def addType(cls, resource_type: int, path: str) -> None:
+        """Add a custom resource type that can be located.
+
+        :param resource_type: An integer that can be used to identify the type. Should be greater than UserType.
+        :param path: The path relative to the search paths where resources of this type can be found./
+        """
+
         if resource_type in cls.__types:
             raise ResourceTypeError("Type {0} already exists".format(resource_type))
 
@@ -206,56 +226,67 @@ class Resources:
 
         cls.__types[resource_type] = path
 
-    ##  Add a custom storage path for a resource type.
-    #
-    #   \param type The type to add a storage path for.
-    #   \param path The path to add as storage path. Should be relative to the resources storage path.
     @classmethod
     def addStorageType(cls, resource_type: int, path: str) -> None:
+        """Add a custom storage path for a resource type.
+
+        :param resource_type: The type to add a storage path for.
+        :param path: The path to add as storage path. Should be relative to the resources storage path.
+        """
+
         if resource_type in cls.__types:
             raise ResourceTypeError("Type {0} already exists".format(resource_type))
 
         cls.__types[resource_type] = path
         cls.__types_storage[resource_type] = path
 
-    ##  Gets the configuration storage path.
-    #
-    #   This is where the application stores user configuration, such as
-    #   preferences.
     @classmethod
     def getConfigStoragePath(cls) -> str:
+        """Gets the configuration storage path.
+
+        This is where the application stores user configuration, such as
+        preferences.
+        """
+
         if not cls.__config_storage_path:
             cls.__initializeStoragePaths()
         return cls.__config_storage_path
 
-    ##  Gets the data storage path.
-    #
-    #   This is where the application stores user files, such as profiles.
     @classmethod
     def getDataStoragePath(cls) -> str:
+        """Gets the data storage path.
+
+        This is where the application stores user files, such as profiles.
+        """
+
         if not cls.__data_storage_path:
             cls.__initializeStoragePaths()
         return cls.__data_storage_path
 
-    ##  Gets the cache storage path.
-    #
-    #   This is where the application stores cache files.
     @classmethod
     def getCacheStoragePath(cls) -> str:
+        """Gets the cache storage path.
+
+        This is where the application stores cache files.
+        """
+
         if not cls.__cache_storage_path:
             cls.__initializeStoragePaths()
         return cls.__cache_storage_path
 
-    ##  Gets the search paths for resources.
-    #
-    #   \return A sequence of paths where resources might be.
     @classmethod
     def getSearchPaths(cls) -> Generator[str, None, None]:
+        """Gets the search paths for resources.
+
+        :return: A sequence of paths where resources might be.
+        """
+
         yield from cls.__paths
 
-    ##  Remove a custom resource type.
     @classmethod
     def removeType(cls, resource_type: int) -> None:
+        """Remove a custom resource type."""
+
         if resource_type not in cls.__types:
             return
 
@@ -267,13 +298,15 @@ class Resources:
         if resource_type in cls.__types_storage:
             del cls.__types_storage[resource_type]
 
-    ##  Performs a factory reset, compressing the current state of configuration
-    #   into an archive and emptying the resource folders.
-    #
-    #   When calling this function, be sure to quit the application immediately
-    #   afterwards, lest the save function write the configuration anew.
     @classmethod
     def factoryReset(cls) -> None:
+        """Performs a factory reset, compressing the current state of configuration
+        into an archive and emptying the resource folders.
+
+        When calling this function, be sure to quit the application immediately
+        afterwards, lest the save function write the configuration anew.
+        """
+
         config_path = cls.getConfigStoragePath()
         data_path = cls.getDataStoragePath()
         cache_path = cls.getCacheStoragePath()
@@ -318,11 +351,10 @@ class Resources:
             except:
                 Logger.logException("e", "Failed to backup [%s] to file [%s]", folder, zip_file_path)
 
-    ## private:
-
-    # Returns a list of paths where args was found.
     @classmethod
     def __find(cls, resource_type: int, *args: str) -> List[str]:
+        """Returns a list of paths where args was found."""
+
         suffix = cls.__types.get(resource_type, None)
         if suffix is None:
             return []
@@ -416,7 +448,6 @@ class Resources:
         if cls.ApplicationVersion == "master" or cls.ApplicationVersion == "unknown":
             storage_dir_name = os.path.join(cls.ApplicationIdentifier, cls.ApplicationVersion)
         else:
-            from UM.Version import Version
             version = Version(cls.ApplicationVersion)
             storage_dir_name = os.path.join(cls.ApplicationIdentifier, "%s.%s" % (version.getMajor(), version.getMinor()))
 
@@ -448,10 +479,12 @@ class Resources:
 
         cls.__paths.insert(0, cls.__data_storage_path)
 
-    ##  Copies the directories of the latest version on this machine if present, so the upgrade will use the copies
-    #   as the base for upgrade. See CURA-3529 for more details.
     @classmethod
     def _copyLatestDirsIfPresent(cls) -> None:
+        """Copies the directories of the latest version on this machine if present, so the upgrade will use the copies
+        as the base for upgrade. See CURA-3529 for more details.
+        """
+
         # Paths for the version we are running right now
         this_version_config_path = Resources.getConfigStoragePath()
         this_version_data_path = Resources.getDataStoragePath()
@@ -462,8 +495,8 @@ class Resources:
 
         Logger.log("d", "Found config: %s and data: %s", config_root_path_list, data_root_path_list)
 
-        latest_config_path = Resources._findLatestDirInPaths(config_root_path_list, dir_type="config")
-        latest_data_path = Resources._findLatestDirInPaths(data_root_path_list, dir_type="data")
+        latest_config_path = Resources._findLatestDirInPaths(config_root_path_list, dir_type = "config")
+        latest_data_path = Resources._findLatestDirInPaths(data_root_path_list, dir_type = "data")
         Logger.log("d", "Latest config path: %s and latest data path: %s", latest_config_path, latest_data_path)
         if not latest_config_path:
             # No earlier storage dirs found, do nothing
@@ -488,7 +521,15 @@ class Resources:
         # Remove "cache" if we copied it together with config
         suspected_cache_path = os.path.join(this_version_config_path, "cache")
         if os.path.exists(suspected_cache_path):
-            shutil.rmtree(suspected_cache_path)
+            try:
+                shutil.rmtree(suspected_cache_path)
+            except EnvironmentError:  # No rights to this directory or it gets deleted asynchronously.
+                try:
+                    time.sleep(1)
+                    shutil.rmtree(suspected_cache_path)  # Sometimes it seems to help to try again after a short while, to prevent concurrency issues.
+                except EnvironmentError:
+                    Logger.error("Failed to delete cache, cache might be outdated and lead to weird errors: {err}")
+                    pass
 
     @classmethod
     def copyVersionFolder(cls, src_path: str, dest_path: str) -> None:
@@ -499,7 +540,10 @@ class Resources:
         temp_dir_path = os.path.join(temp_root_dir_path, base_dir_name)
         # src -> temp -> dest
         try:
-            shutil.copytree(src_path, temp_dir_path, ignore = shutil.ignore_patterns("*.lock", "*.log", "old"))
+            # Copy everything, except for the logs, lock or really old (we used to copy old configs to the "old" folder)
+            # config files.
+            shutil.copytree(src_path, temp_dir_path,
+                            ignore = shutil.ignore_patterns("*.lock", "*.log", "*.log.?", "old"))
             # if the dest_path exist, it needs to be removed first
             if not os.path.exists(dest_path):
                 shutil.move(temp_dir_path, dest_path)
@@ -510,38 +554,52 @@ class Resources:
 
     @classmethod
     def _findLatestDirInPaths(cls, search_path_list: List[str], dir_type: str = "config") -> Optional[str]:
-        # version dir name must match: <digit(s)>.<digit(s)><whatever>
-        version_regex = re.compile(r'^[0-9]+\.[0-9]+.*$')
+        # version dir name must match: <digit(s)>.<digit(s)>
+        version_regex = re.compile(r"^[0-9]+\.[0-9]+$")
         check_dir_type_func_dict = {
             "data": Resources._isNonVersionedDataDir,
             "config": Resources._isNonVersionedConfigDir
         }
         check_dir_type_func = check_dir_type_func_dict[dir_type]
 
-        latest_config_path = None
+        # CURA-6744
+        # If the application version matches "<major>.<minor>", create a Version object for it for comparison, so we
+        # can find the directory with the highest version that's below the application version.
+        # An application version that doesn't match "<major>.<minor>", e.g. "master", probably indicates a temporary
+        # version, and in this case, this temporary version is treated as the latest version. It will ONLY upgrade from
+        # a highest "<major>.<minor>" version if it's present.
+        # For app version, there can be extra version strings at the end. For comparison, we only want the
+        # "<major>.<minor>.<patch>" part. Here we use a regex to find that part in the app version string.
+        semantic_version_regex = re.compile(r"(^[0-9]+\.([0-9]+)*).*$")
+        app_version = None  # type: Optional[Version]
+        app_version_str = cls.ApplicationVersion
+        if app_version_str is not None:
+            result = semantic_version_regex.match(app_version_str)
+            if result is not None:
+                app_version_str = result.group(0)
+                app_version = Version(app_version_str)
+
+        latest_config_path = None  # type: Optional[str]
         for search_path in search_path_list:
             if not os.path.exists(search_path):
                 continue
 
             # Give priority to a folder with files with version number in it
-            storage_dir_name_list = next(os.walk(search_path))[1]
-            if storage_dir_name_list:
-                storage_dir_name_list = sorted(storage_dir_name_list, reverse=True)
-                # for now we use alphabetically ordering to determine the latest version (excluding master)
-                for dir_name in storage_dir_name_list:
-                    if dir_name.endswith("master"):
-                        continue
-                    if version_regex.match(dir_name) is None:
-                        continue
+            try:
+                storage_dir_name_list = next(os.walk(search_path))[1]
+            except StopIteration:  # There is no next().
+                continue
 
-                    # make sure that the version we found is not newer than the current version
-                    if version_regex.match(cls.ApplicationVersion):
-                        later_version = sorted([cls.ApplicationVersion, dir_name], reverse=True)[0]
-                        if cls.ApplicationVersion != later_version:
-                            continue
+            match_dir_name_list = [n for n in storage_dir_name_list if version_regex.match(n) is not None]
+            match_dir_version_list = [{"dir_name": n, "version": Version(n)} for n in match_dir_name_list]  # type: List[Dict[str, Union[str, Version]]]
+            match_dir_version_list = sorted(match_dir_version_list, key = lambda x: x["version"], reverse = True)
+            if app_version is not None:
+                match_dir_version_list = list(x for x in match_dir_version_list if x["version"] < app_version)
 
-                    latest_config_path = os.path.join(search_path, dir_name)
-                    break
+            if len(match_dir_version_list) > 0:
+                if isinstance(match_dir_version_list[0]["dir_name"], str):
+                    latest_config_path = os.path.join(search_path, match_dir_version_list[0]["dir_name"])  # type: ignore
+
             if latest_config_path is not None:
                 break
 
@@ -591,6 +649,7 @@ class Resources:
         ContainerStacks: "stacks",
         Plugins: "plugins",
         BundledPackages: "bundled_packages",
+        Texts: "texts",
     } #type: Dict[int, str]
     __types_storage = {
         Resources: "",

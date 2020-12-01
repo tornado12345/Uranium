@@ -1,6 +1,6 @@
 project(uranium NONE)
 
-cmake_minimum_required(VERSION 2.8.12)
+cmake_minimum_required(VERSION 3.6)
 
 message(STATUS ${CMAKE_MODULE_PATH})
 
@@ -10,7 +10,7 @@ include(UraniumTranslationTools)
 
 include(GNUInstallDirs)
 
-find_package(PythonInterp 3.5.0 REQUIRED)
+find_package(PythonInterp 3 REQUIRED)
 
 # # Checks using pylint
 # Note that we use exit 0 here to not mark the build as a failure on check failure
@@ -53,6 +53,8 @@ endif()
 install(FILES ${CMAKE_SOURCE_DIR}/cmake/UraniumTranslationTools.cmake
         DESTINATION ${CMAKE_INSTALL_DATADIR}/cmake-${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION}/Modules/ )
 install(DIRECTORY resources DESTINATION ${CMAKE_INSTALL_DATADIR}/uranium)
-install(DIRECTORY plugins DESTINATION lib${LIB_SUFFIX}/uranium)
+
+# Detect plugins to install
+include(UraniumPluginInstall)
 
 include(CPackConfig.cmake)

@@ -14,10 +14,10 @@ from UM.Settings.ContainerStack import IncorrectVersionError
 from UM.Settings.ContainerStack import InvalidContainerStackError
 from UM.Settings.DefinitionContainer import DefinitionContainer
 from UM.Settings.InstanceContainer import InstanceContainer
-from UM.Resources import Resources
-from MockContainer import MockContainer
-
 from UM.Settings.Validator import ValidatorState
+from UM.Resources import Resources
+
+from .MockContainer import MockContainer
 
 Resources.addSearchPath(os.path.dirname(os.path.abspath(__file__)))
 
@@ -151,7 +151,7 @@ def test_deserializeMetadata():
         name = Test
         id = testid
         version = {version}
-        
+
         [metadata]
         foo = bar
         """.format(version=ContainerStack.Version)
@@ -794,9 +794,9 @@ def test_getSetReadOnly(container_stack):
 
 
 def test_isSetDirty(container_stack):
-    assert container_stack.isDirty()
-    container_stack.setDirty(False)
     assert not container_stack.isDirty()
+    container_stack.setDirty(True)
+    assert container_stack.isDirty()
 
 
 def test_getSetPath(container_stack):
@@ -816,7 +816,7 @@ def test_getHasErrors(container_stack):
     assert not container_stack.hasErrors()
 
     # Fake the property so it does return validation state
-    container.getProperty = MagicMock(return_value = ValidatorState.MaximumError)
+    container_stack.getProperty = MagicMock(return_value = ValidatorState.MaximumError)
     assert container_stack.hasErrors() # Now the container stack has errors!
 
     assert container_stack.getErrorKeys() == ["test_key"]

@@ -1,5 +1,6 @@
-# Copyright (c) 2018 Ultimaker B.V.
+# Copyright (c) 2020 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
+
 from typing import cast
 from unittest.mock import MagicMock
 
@@ -19,7 +20,7 @@ class FixtureApplication(Application):
     engineCreatedSignal = Signal()
 
     def __init__(self):
-        super().__init__(name = "test", version = "1.0", api_version = "5.0.0")
+        super().__init__(name = "test", version = "1.0", api_version = "7.4.0")
         super().initialize()
         Signal._signalQueue = self
 
@@ -34,6 +35,9 @@ class FixtureApplication(Application):
 
     def getRenderer(self):
         return MagicMock()
+
+    def showMessage(self, message):
+        pass
 
 @pytest.fixture()
 def application():

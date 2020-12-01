@@ -9,21 +9,20 @@ from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
 
 from UM.Application import Application
+from UM.FileHandler.WriteFileJob import WriteFileJob
 from UM.Logger import Logger
 from UM.Mesh.MeshWriter import MeshWriter
-from UM.FileHandler.WriteFileJob import WriteFileJob
 from UM.Message import Message
-
-from UM.OutputDevice.OutputDevice import OutputDevice
 from UM.OutputDevice import OutputDeviceError
-
+from UM.OutputDevice.OutputDevice import OutputDevice
 from UM.i18n import i18nCatalog
 
 catalog = i18nCatalog("uranium")
 
 
-##  Implements an OutputDevice that supports saving to arbitrary local files.
 class LocalFileOutputDevice(OutputDevice):
+    """Implements an OutputDevice that supports saving to arbitrary local files."""
+
     def __init__(self):
         super().__init__("local_file")
 
@@ -34,16 +33,18 @@ class LocalFileOutputDevice(OutputDevice):
 
         self._writing = False
 
-    ##  Request the specified nodes to be written to a file.
-    #
-    #   \param nodes A collection of scene nodes that should be written to the
-    #   file.
-    #   \param file_name \type{string} A suggestion for the file name to write
-    #   to. Can be freely ignored if providing a file name makes no sense.
-    #   \param limit_mimetypes Should we limit the available MIME types to the
-    #   MIME types available to the currently active machine?
-    #   \param kwargs Keyword arguments.
     def requestWrite(self, nodes, file_name = None, limit_mimetypes = None, file_handler = None, **kwargs):
+        """Request the specified nodes to be written to a file.
+
+        :param nodes: A collection of scene nodes that should be written to the
+        file.
+        :param file_name: A suggestion for the file name to write
+        to. Can be freely ignored if providing a file name makes no sense.
+        :param limit_mimetypes: Should we limit the available MIME types to the
+        MIME types available to the currently active machine?
+        :param kwargs: Keyword arguments.
+        """
+
         if self._writing:
             raise OutputDeviceError.DeviceBusyError()
 
@@ -92,14 +93,20 @@ class LocalFileOutputDevice(OutputDevice):
                 preferred_mimetype = mime_type
                 break
 
+        extension_added = False
         for item in file_types:
             type_filter = "{0} (*.{1})".format(item["description"], item["extension"])
             filters.append(type_filter)
             mime_types.append(item["mime_type"])
             if preferred_mimetype == item["mime_type"]:
                 selected_filter = type_filter
-                if file_name:
+                if file_name and not extension_added:
+                    extension_added = True
                     file_name += "." + item["extension"]
+
+        # CURA-6411: This code needs to be before dialog.selectFile and the filters, because otherwise in macOS (for some reason) the setDirectory call doesn't work.
+        stored_directory = Application.getInstance().getPreferences().getValue("local_file/dialog_save_path")
+        dialog.setDirectory(stored_directory)
 
         # Add the file name before adding the extension to the dialog
         if file_name is not None:
@@ -108,9 +115,6 @@ class LocalFileOutputDevice(OutputDevice):
         dialog.setNameFilters(filters)
         if selected_filter is not None:
             dialog.selectNameFilter(selected_filter)
-
-        stored_directory = Application.getInstance().getPreferences().getValue("local_file/dialog_save_path")
-        dialog.setDirectory(stored_directory)
 
         if not dialog.exec_():
             raise OutputDeviceError.UserCanceledError()
@@ -124,7 +128,7 @@ class LocalFileOutputDevice(OutputDevice):
         # Get file name from file dialog
         file_name = dialog.selectedFiles()[0]
         Logger.log("d", "Writing to [%s]..." % file_name)
-        
+
         if os.path.exists(file_name):
             result = QMessageBox.question(None, catalog.i18nc("@title:window", "File Already Exists"), catalog.i18nc("@label Don't translate the XML tag <filename>!", "The file <filename>{0}</filename> already exists. Are you sure you want to overwrite it?").format(file_name))
             if result == QMessageBox.No:
@@ -168,7 +172,7 @@ class LocalFileOutputDevice(OutputDevice):
             raise OutputDeviceError.PermissionDeniedError(catalog.i18nc("@info:status Don't translate the XML tags <filename>!", "Permission denied when trying to save <filename>{0}</filename>").format(file_name)) from e
         except OSError as e:
             Logger.log("e", "Operating system would not let us write to %s: %s", file_name, str(e))
-            raise OutputDeviceError.WriteRequestFailedError(catalog.i18nc("@info:status Don't translate the XML tags <filename> or <message>!", "Could not save to <filename>{0}</filename>: <message>{1}</message>").format()) from e
+            raise OutputDeviceError.WriteRequestFailedError(catalog.i18nc("@info:status Don't translate the XML tags <filename> or <message>!", "Could not save to <filename>{0}</filename>: <message>{1}</message>").format(file_name, str(e))) from e
 
     def _onJobProgress(self, job, progress):
         self.writeProgress.emit(self, progress)

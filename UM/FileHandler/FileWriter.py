@@ -1,15 +1,16 @@
-# Copyright (c) 2016 Ultimaker B.V.
+# Copyright (c) 2019 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 from UM.PluginObject import PluginObject
 
 
-##  Base class for writer objects
 class FileWriter(PluginObject):
+    """Base class for writer objects"""
+
     class OutputMode:
         TextMode = 1
         BinaryMode = 2
 
-    def __init__(self, add_to_recent_files = True, *args, **kwargs):
+    def __init__(self, add_to_recent_files: bool = True, *args, **kwargs) -> None:
         super().__init__()
         self._information = ""  # type: str
 
@@ -19,7 +20,7 @@ class FileWriter(PluginObject):
     def getAddToRecentFiles(self) -> bool:
         return self._add_to_recent_files
 
-    def write(self, stream, data):
+    def write(self, stream, data, mode = OutputMode.TextMode):
         raise NotImplementedError("Writer plugin was not correctly implemented, no write was specified")
 
     def setInformation(self, information_message: str):

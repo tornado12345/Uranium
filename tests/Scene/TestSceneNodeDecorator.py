@@ -2,7 +2,7 @@ import pytest
 from UM.Scene.SceneNode import SceneNode
 from UM.Scene.SceneNodeDecorator import SceneNodeDecorator
 from unittest.mock import MagicMock
-
+import copy
 
 class TheAmazingTestDecorator(SceneNodeDecorator):
     def __init__(self, *args, **kwargs):
@@ -31,69 +31,73 @@ class TheNotSoAmazingTestDecorator(SceneNodeDecorator):
         return "okayish"
 
 
-if __name__ == '__main__':
-    def test_SceneNodeDecorator():
-        test_node = SceneNode()
-        test_decorator = SceneNodeDecorator()
-        amazing_decorator = TheAmazingTestDecorator()
-        less_amazing_decorator = TheLessAmazingTestDecorator()
-        not_amazing_decorator = TheNotSoAmazingTestDecorator()
+def test_getNode():
+    decorator = SceneNodeDecorator()
+    scene_node = SceneNode()
+    decorator.setNode(scene_node)
+    assert decorator.getNode() == scene_node
 
-        # Replace emit with mock object
-        test_node.decoratorsChanged.emit = MagicMock()
-        test_decorator.clear = MagicMock()
 
-        # Nothing should happen.
-        test_node.addDecorator(None)
-        assert len(test_node.getDecorators()) == 0
-        assert test_node.decoratorsChanged.emit.call_count == 0
+def test_deepcopy():
+    decorator = SceneNodeDecorator()
+    with pytest.raises(NotImplementedError):
+        copy.deepcopy(decorator)
 
-        # Nothing should happen.
-        test_node.addDecorator(SceneNode())
-        assert len(test_node.getDecorators()) == 0
-        assert test_node.decoratorsChanged.emit.call_count == 0
 
-        # First actual change
-        test_node.addDecorator(test_decorator)
-        assert len(test_node.getDecorators()) == 1
-        assert test_node.decoratorsChanged.emit.call_count == 1
+def test_SceneNodeDecorator():
+    test_node = SceneNode()
+    test_decorator = SceneNodeDecorator()
+    amazing_decorator = TheAmazingTestDecorator()
+    less_amazing_decorator = TheLessAmazingTestDecorator()
+    not_amazing_decorator = TheNotSoAmazingTestDecorator()
 
-        # Adding a decorator of the same type (SceneNodeDecorator) again should not do anything.
-        test_node.addDecorator(test_decorator)
-        assert len(test_node.getDecorators()) == 1
-        assert test_node.decoratorsChanged.emit.call_count == 1
+    # Replace emit with mock object
+    test_node.decoratorsChanged.emit = MagicMock()
+    test_decorator.clear = MagicMock()
 
-        # Remove the decorator again!
-        test_node.removeDecorator(SceneNodeDecorator)
-        assert len(test_node.getDecorators()) == 0
-        assert test_node.decoratorsChanged.emit.call_count == 2
-        assert test_decorator.clear.call_count == 1  # Ensure that the clear of the test decorator is called.
+    # First actual change
+    test_node.addDecorator(test_decorator)
+    assert len(test_node.getDecorators()) == 1
+    assert test_node.decoratorsChanged.emit.call_count == 1
 
-        # Add a number of decorators!
-        test_node.addDecorator(amazing_decorator)
-        test_node.addDecorator(less_amazing_decorator)
-        test_node.addDecorator(not_amazing_decorator)
-        assert test_node.decoratorsChanged.emit.call_count == 5
-        assert len(test_node.getDecorators()) == 3
+    # Adding a decorator of the same type (SceneNodeDecorator) again should not do anything.
+    test_node.addDecorator(test_decorator)
+    assert len(test_node.getDecorators()) == 1
+    assert test_node.decoratorsChanged.emit.call_count == 1
+    assert test_node.getDecorator(type(test_decorator)) == test_decorator
 
-        assert test_node.hasDecoration("zomg") == False
-        assert test_node.hasDecoration("theOkayDecoration")
-        assert test_node.hasDecoration("theAmazingDecoration")
+    # Remove the decorator again!
+    test_node.removeDecorator(SceneNodeDecorator)
+    assert len(test_node.getDecorators()) == 0
+    assert test_node.decoratorsChanged.emit.call_count == 2
+    assert test_decorator.clear.call_count == 1  # Ensure that the clear of the test decorator is called.
 
-        # Calling the decorations with args / kwargs
-        assert test_node.callDecoration("theOkayDecoration", None) is None
-        assert test_node.callDecoration("theEvenMoreAmazingDecoration", "beep") == ("beep", "Wow", "so wow")
-        assert test_node.callDecoration("theEvenMoreAmazingDecoration", "beep", much_test = "Wow") == ("beep", "Wow", "Wow")
+    # Add a number of decorators!
+    test_node.addDecorator(amazing_decorator)
+    test_node.addDecorator(less_amazing_decorator)
+    test_node.addDecorator(not_amazing_decorator)
+    assert test_node.decoratorsChanged.emit.call_count == 5
+    assert len(test_node.getDecorators()) == 3
 
-        # Calling decoration that is "double"
-        assert test_node.callDecoration("theAmazingDecoration") == "Amazing!"
-        test_node.removeDecorator(TheAmazingTestDecorator)
-        assert test_node.callDecoration("theAmazingDecoration") == "amazing"
+    assert test_node.hasDecoration("zomg") == False
+    assert test_node.hasDecoration("theOkayDecoration")
+    assert test_node.hasDecoration("theAmazingDecoration")
 
-        not_amazing_decorator.clear = MagicMock()
-        test_node.removeDecorators()
-        # Also assure that removing all decorators also triggers the clear
-        assert not_amazing_decorator.clear.call_count == 1
-        assert len(test_node.getDecorators()) == 0
-        assert test_node.decoratorsChanged.emit.call_count == 8  # +3 changes
+    # Calling the decorations with args / kwargs
+    assert test_node.callDecoration("theOkayDecoration", None) is None
+    assert test_node.callDecoration("theEvenMoreAmazingDecoration", "beep") == ("beep", "Wow", "so wow")
+    assert test_node.callDecoration("theEvenMoreAmazingDecoration", "beep", much_test = "Wow") == ("beep", "Wow", "Wow")
+
+    # Calling decoration that is "double"
+    assert test_node.callDecoration("theAmazingDecoration") == "Amazing!"
+    test_node.removeDecorator(TheAmazingTestDecorator)
+    assert test_node.callDecoration("theAmazingDecoration") == "amazing"
+
+    not_amazing_decorator.clear = MagicMock()
+    test_node.removeDecorators()
+    # Also assure that removing all decorators also triggers the clear
+    assert not_amazing_decorator.clear.call_count == 1
+    assert len(test_node.getDecorators()) == 0
+    assert test_node.decoratorsChanged.emit.call_count == 7
+    assert test_node.getDecorator(type(test_decorator)) is None
 

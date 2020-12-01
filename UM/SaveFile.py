@@ -1,27 +1,39 @@
-# Copyright (c) 2015 Ultimaker B.V.
+# Copyright (c) 2020 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 
 import tempfile
 import os
 import os.path
 import sys
-
+from typing import Union, IO
+fsync = os.fsync
 if sys.platform != "win32":
     import fcntl
-
     def lockFile(file):
-        fcntl.flock(file, fcntl.LOCK_EX)
-else:
+        try:
+            fcntl.flock(file, fcntl.LOCK_EX)
+        except OSError:  # Some file systems don't support file locks.
+            pass
+
+    if hasattr(fcntl, 'F_FULLFSYNC'):
+        def fsync(fd):
+            # https://lists.apple.com/archives/darwin-dev/2005/Feb/msg00072.html
+            # https://developer.apple.com/library/mac/documentation/Darwin/Reference/ManPages/man2/fsync.2.html
+            fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
+
+else:  # On Windows, flock doesn't exist so we disable it at risk of corruption when using multiple application instances.
     def lockFile(file): #pylint: disable=unused-argument
         pass
 
 
-##  A class to handle atomic writes to a file.
-#
-#   This class can be used to perform atomic writes to a file. Atomic writes ensure
-#   that the file contents are always correct and that concurrent writes do not
-#   end up writing to the same file at the same time.
 class SaveFile:
+    """A class to handle atomic writes to a file.
+
+    This class can be used to perform atomic writes to a file. Atomic writes ensure
+    that the file contents are always correct and that concurrent writes do not
+    end up writing to the same file at the same time.
+    """
+
     # How many time so re-try saving this file when getting unknown exceptions.
     __max_retries = 10
 
@@ -31,7 +43,7 @@ class SaveFile:
     # \param mode The file mode to use. See open() for details.
     # \param encoding The encoding to use while writing the file. Defaults to UTF-8.
     # \param kwargs Keyword arguments passed on to open().
-    def __init__(self, path, mode, encoding = "utf-8", **kwargs):
+    def __init__(self, path: Union[str, IO[str]], mode: str, encoding: str = "utf-8", **kwargs) -> None:
         self._path = path
         self._mode = mode
         self._encoding = encoding
@@ -45,6 +57,8 @@ class SaveFile:
         return self._temp_file
 
     def __exit__(self, exc_type, exc_value, traceback):
+        self._temp_file.flush()
+        fsync(self._temp_file.fileno())
         self._temp_file.close()
 
         self.__max_retries = 10
@@ -77,6 +91,7 @@ class SaveFile:
                 if self.__max_retries <= 0:
                     raise e
                 self.__max_retries -= 1
+                continue
 
             if not self._file.closed and os.path.sameopenfile(self._file.fileno(), file_new.fileno()):
                 file_new.close()

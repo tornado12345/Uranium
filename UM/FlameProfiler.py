@@ -5,11 +5,10 @@ import os
 import threading
 from contextlib import contextmanager
 import functools
-from typing import List
+from typing import List, Callable, Any
 
 from PyQt5.QtCore import pyqtSlot as pyqt5PyqtSlot
 from UM.Logger import Logger
-
 # A simple profiler which produces data suitable for viewing as a flame graph
 # when using the Big Flame Graph plugin.
 #
@@ -19,10 +18,13 @@ from UM.Logger import Logger
 # Set the environment variable URANIUM_FLAME_PROFILER to something before
 # starting the application to make the profiling code available.
 
-def enabled():
+
+def enabled() -> bool:
     return "URANIUM_FLAME_PROFILER" in os.environ
 
+
 record_profile = False  # Flag to keep track of whether we are recording data.
+
 
 # Profiling data is build up of a tree of these kinds of nodes. Each node
 # has a name, start time, end time, and a list of children nodes which are
@@ -80,10 +82,13 @@ clear_profile_requested = False
 record_profile_requested = False
 stop_record_profile_requested = False
 
-##  Fetch the accumulated profile data.
-#
-#   \return \type{ProfileCallNode} or None if there is no data.
+
 def getProfileData():
+    """Fetch the accumulated profile data.
+
+    :return: :type{ProfileCallNode} or None if there is no data.
+    """
+
     raw_profile_calls = child_accu_stack[0]
     if len(raw_profile_calls) == 0:
         return None
@@ -93,22 +98,29 @@ def getProfileData():
     fill_children = _fillInProfileSpaces(start_time, end_time, raw_profile_calls)
     return _ProfileCallNode("", 0, start_time, end_time, fill_children)
 
-##  Erase any profile data.
+
 def clearProfileData():
+    """Erase any profile data."""
+
     global clear_profile_requested
     clear_profile_requested = True
 
-##  Start recording profile data.
+
 def startRecordingProfileData():
+    """Start recording profile data."""
+
     global record_profile_requested
     global stop_record_profile_requested
     stop_record_profile_requested = False
     record_profile_requested = True
 
-##  Stop recording profile data.
+
 def stopRecordingProfileData():
+    """Stop recording profile data."""
+
     global stop_record_profile_requested
     stop_record_profile_requested = True
+
 
 def _fillInProfileSpaces(start_time, end_time, profile_call_list):
     result = []
@@ -124,15 +136,19 @@ def _fillInProfileSpaces(start_time, end_time, profile_call_list):
 
     return result
 
+
 def secondsToMS(value):
     return math.floor(value *1000)
 
-##  Profile a block of code.
-#
-#   Use this context manager to wrap and profile a block of code.
-#   \param name \type{str} The name to use to identify this code in the profile report.
+
 @contextmanager
 def profileCall(name):
+    """Profile a block of code.
+
+    Use this context manager to wrap and profile a block of code.
+    :param name: :type{str} The name to use to identify this code in the profile report.
+    """
+
     if enabled():
         start_time = time.perf_counter()
         child_accu_stack.append([])
@@ -147,12 +163,16 @@ def profileCall(name):
     else:
         yield
 
-##  Return whether we are recording profiling information.
-#
-#   \return \type{bool} True if we are recording.
-def isRecordingProfile():
+
+def isRecordingProfile() -> bool:
+    """Return whether we are recording profiling information.
+
+    :return: :type{bool} True if we are recording.
+    """
+
     global record_profile
     return record_profile and threading.main_thread() is threading.current_thread()
+
 
 def updateProfileConfig():
     global child_accu_stack
@@ -177,10 +197,10 @@ def updateProfileConfig():
             record_profile = False
             Logger.log('d', 'Stopping record stop_record_profile_requested')
 
-##  Decorator which can be manually applied to methods to record profiling information.
-#
-#   \type{Callable}
+
 def profile(function):
+    """Decorator which can be manually applied to methods to record profiling information."""
+
     if enabled():
         @functools.wraps(function)
         def runIt(*args, ** kwargs):
@@ -193,10 +213,13 @@ def profile(function):
     else:
         return function
 
-##  Drop in replacement for PyQt5's pyqtSlot decorator which records profiling information.
-#
-#   See the PyQt5 documentation for information about pyqtSlot.
-def pyqtSlot(*args, **kwargs):
+
+def pyqtSlot(*args, **kwargs) -> Callable[..., Any]:
+    """Drop in replacement for PyQt5's pyqtSlot decorator which records profiling information.
+
+    See the PyQt5 documentation for information about pyqtSlot.
+    """
+
     if enabled():
         def wrapIt(function):
             @functools.wraps(function)

@@ -1,24 +1,27 @@
 # Copyright (c) 2018 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 
-import math
 from typing import Optional, Tuple, cast
 
+import math
+from PyQt5 import QtCore, QtWidgets
+
+from UM.Application import Application
+from UM.Event import Event, MouseEvent, KeyEvent
+from UM.Math.Matrix import Matrix
+from UM.Math.Vector import Vector
 from UM.Qt.Bindings.MainWindow import MainWindow
 from UM.Qt.QtApplication import QtApplication
 from UM.Tool import Tool
-from UM.Event import Event, MouseEvent, KeyEvent
-from UM.Math.Vector import Vector
-from UM.Math.Matrix import Matrix
-from UM.Application import Application
-from PyQt5 import QtCore, QtWidgets
 
 
-##  Provides the tool to manipulate the camera: moving, zooming and rotating
-#
-#   Note that zooming is performed by moving closer to or further away from the origin ("dolly")
-#   instead of changing the field of view of the camera ("zoom")
 class CameraTool(Tool):
+    """Provides the tool to manipulate the camera: moving, zooming and rotating
+
+    Note that zooming is performed by moving closer to or further away from the origin ("dolly")
+    instead of changing the field of view of the camera ("zoom")
+    """
+
     def __init__(self) -> None:
         super().__init__()
         self._scene = Application.getInstance().getController().getScene()
@@ -55,32 +58,39 @@ class CameraTool(Tool):
         self._invert_zoom = Application.getInstance().getPreferences().getValue("view/invert_zoom")
         self._zoom_to_mouse = Application.getInstance().getPreferences().getValue("view/zoom_to_mouse")
 
-    ##  Set the minimum and maximum distance from the origin used for "zooming" the camera
-    #
-    #   \param min distance from the origin when fully zoomed in
-    #   \param max distance from the origin when fully zoomed out
     def setZoomRange(self, min: float, max: float) -> None:
+        """Set the minimum and maximum distance from the origin used for "zooming" the camera
+
+        :param min: distance from the origin when fully zoomed in
+        :param max: distance from the origin when fully zoomed out
+        """
+
         self._min_zoom = min
         self._max_zoom = max
         self.clipToZoom()
 
-    ##  Makes sure that the camera is within the zoom range.
     def clipToZoom(self) -> None:
+        """Makes sure that the camera is within the zoom range."""
+
         #Clip the camera to the new zoom range.
         camera = self._scene.getActiveCamera()
         if camera is None:
             return
-        distance = (camera.getWorldPosition() - self._origin).length()
-        direction = (camera.getWorldPosition() - self._origin).normalized()
-        if distance < self._min_zoom:
-            camera.setPosition(self._origin + direction * self._min_zoom)
-        if distance > self._max_zoom:
-            camera.setPosition(self._origin + direction * self._max_zoom)
 
-    ##  Set the point around which the camera rotates
-    #
-    #   \param origin type(Vector) origin point
+        if camera.isPerspective():
+            distance = (camera.getWorldPosition() - self._origin).length()
+            direction = (camera.getWorldPosition() - self._origin).normalized()
+            if distance < self._min_zoom:
+                camera.setPosition(self._origin + direction * self._min_zoom)
+            if distance > self._max_zoom:
+                camera.setPosition(self._origin + direction * self._max_zoom)
+
     def setOrigin(self, origin: Vector) -> None:
+        """Set the point around which the camera rotates
+
+        :param origin: type(Vector) origin point
+        """
+
         camera = self._scene.getActiveCamera()
         if camera is None:
             return
@@ -89,16 +99,20 @@ class CameraTool(Tool):
         camera.translate(translation)
         self._rotateCamera(0.0, 0.0)
 
-    ##  Get the point around which the camera rotates
-    #
-    #   \return origin point
     def getOrigin(self) -> Vector:
+        """Get the point around which the camera rotates
+
+        :return: origin point
+        """
+
         return self._origin
 
-    ##  Prepare modifier-key variables on each event
-    #
-    #   \param event event passed from event handler
     def checkModifierKeys(self, event) -> None:
+        """Prepare modifier-key variables on each event
+
+        :param event: event passed from event handler
+        """
+
         modifiers = QtWidgets.QApplication.keyboardModifiers()
         self._shift_is_active = (modifiers & QtCore.Qt.ShiftModifier) != QtCore.Qt.NoModifier
         self._ctrl_is_active = (modifiers & QtCore.Qt.ControlModifier) != QtCore.Qt.NoModifier
@@ -110,11 +124,13 @@ class CameraTool(Tool):
             if event.key == KeyEvent.SpaceKey:
                 self._space_is_active = False
 
-    ##  Check if the event warrants a call off the _moveCamera method
-    #
-    #   \param event event passed from event handler
-    #   \return type(boolean)
     def moveEvent(self, event) -> bool:
+        """Check if the event warrants a call off the _moveCamera method
+
+        :param event: event passed from event handler
+        :return: type(boolean)
+        """
+
         if MouseEvent.MiddleButton in event.buttons:  # mousewheel
             return True
         elif MouseEvent.LeftButton in event.buttons and self._shift_is_active is True:  # shift -> leftbutton
@@ -123,21 +139,25 @@ class CameraTool(Tool):
             return True
         return False
 
-    ##  Check if the event warrants a call off the _rotateCamera method
-    #
-    #   \param event event passed from event handler
-    #   \return type(boolean)
     def rotateEvent(self, event) -> bool:
+        """Check if the event warrants a call off the _rotateCamera method
+
+        :param event: event passed from event handler
+        :return: type(boolean)
+        """
+
         if MouseEvent.RightButton in event.buttons:  # rightbutton
             return True
         elif MouseEvent.LeftButton in event.buttons and self._space_is_active is True:  # shift -> leftbutton
             return True
         return False
 
-    ##  Calls the zoomaction method for the mousewheel event, mouseMoveEvent (in combo with alt or space) and when the plus or minus keys are used
-    #
-    #   \param event event passed from event handler
     def initiateZoom(self, event) -> bool:
+        """Calls the zoomaction method for the mousewheel event, mouseMoveEvent (in combo with alt or space) and when the plus or minus keys are used
+
+        :param event: event passed from event handler
+        """
+
         if event.type is event.MousePressEvent:
             return False
         elif event.type is Event.MouseMoveEvent and self._space_is_active is False: #space -> mousemove
@@ -162,17 +182,20 @@ class CameraTool(Tool):
                 return True
         return False
 
-    ##  Rotate camera around origin.
-    #
-    #   \param x Angle by which the camera should be rotated horizontally.
-    #   \param y Angle by which the camera should be rotated vertically.
-    def rotateCam(self, x: float, y: float) -> None:
+    def rotateCamera(self, x: float, y: float) -> None:
+        """Rotate camera around origin.
+
+        :param x: Angle by which the camera should be rotated horizontally.
+        :param y: Angle by which the camera should be rotated vertically.
+        """
+
         temp_x = x / 180
         temp_y = y / 180
         self._rotateCamera(temp_x, temp_y)
 
-    ##  Handle mouse and keyboard events
     def event(self, event) -> bool:
+        """Handle mouse and keyboard events"""
+
         self.checkModifierKeys(event)
         # Handle mouse- and keyboard-initiated zoom-events
         self.initiateZoom(event)
@@ -226,77 +249,87 @@ class CameraTool(Tool):
 
         return False
 
-    ##  Move the camera in response to a mouse event.
-    #
-    #   \param event event passed from event handler
     def _moveCamera(self, event) -> None:
+        """Move the camera in response to a mouse event.
+
+        :param event: event passed from event handler
+        """
+
         camera = self._scene.getActiveCamera()
         if not camera or not camera.isEnabled():
             return
-
-        self._scene.getSceneLock().acquire()
 
         camera_position = camera.getWorldPosition()
         camera.translate(Vector(-event.deltaX * 100, event.deltaY * 100, 0))
         translation = camera.getWorldPosition() - camera_position
         self._origin += translation
 
-        self._scene.getSceneLock().release()
-
-    ##  "Zoom" the camera in response to a mouse event.
-    #
-    #   Note that the camera field of view is left unaffected, but instead the camera moves closer to the origin
-    #   \param zoom_range factor by which the distance to the origin is multiplied, multiplied by 1280
     def _zoomCamera(self, zoom_range: float, event: Optional[Event] = None) -> None:
+        """"Zoom" the camera in response to a mouse event.
+
+        Note that the camera field of view is left unaffected, but instead the camera moves closer to the origin
+        :param zoom_range: factor by which the distance to the origin is multiplied, multiplied by 1280
+        """
+
         camera = self._scene.getActiveCamera()
         if not camera or not camera.isEnabled():
             return
 
         self.clipToZoom()
 
-        self._scene.getSceneLock().acquire()
+        if camera.isPerspective():
+            r = (camera.getWorldPosition() - self._origin).length()
+            delta = r * (zoom_range / 128 / 10.0)
+            r -= delta
 
-        r = (camera.getWorldPosition() - self._origin).length()
-        delta = r * (zoom_range / 128 / 10.0)
-        r -= delta
+            if self._invert_zoom:
+                delta *= -1
 
-        if self._invert_zoom:
-            delta *= -1
+            move_vector = Vector(0.0, 0.0, 1.0)
 
-        move_vector = Vector(0.0, 0.0, 1.0)
+            if event is not None and self._zoom_to_mouse:
+                viewport_center_x = QtApplication.getInstance().getRenderer().getViewportWidth() / 2
+                viewport_center_y = QtApplication.getInstance().getRenderer().getViewportHeight() / 2
+                main_window = cast(MainWindow, QtApplication.getInstance().getMainWindow())
+                mouse_diff_center_x = viewport_center_x - main_window.mouseX
+                mouse_diff_center_y = viewport_center_y - main_window.mouseY
 
-        if event is not None and self._zoom_to_mouse:
-            viewport_center_x = QtApplication.getInstance().getRenderer().getViewportWidth() / 2
-            viewport_center_y = QtApplication.getInstance().getRenderer().getViewportHeight() / 2
-            main_window = cast(MainWindow, QtApplication.getInstance().getMainWindow())
-            mouse_diff_center_x = viewport_center_x - main_window.mouseX
-            mouse_diff_center_y = viewport_center_y - main_window.mouseY
+                x_component = mouse_diff_center_x / QtApplication.getInstance().getRenderer().getViewportWidth()
+                y_component = mouse_diff_center_y / QtApplication.getInstance().getRenderer().getViewportHeight()
 
-            x_component = mouse_diff_center_x / QtApplication.getInstance().getRenderer().getViewportWidth()
-            y_component = mouse_diff_center_y / QtApplication.getInstance().getRenderer().getViewportHeight()
+                move_vector = Vector(x_component, -y_component, 1)
+                move_vector = move_vector.normalized()
 
-            move_vector = Vector(x_component, -y_component, 1)
-            move_vector = move_vector.normalized()
+            move_vector = -delta * move_vector
+            if delta != 0:
+                if self._min_zoom < r < self._max_zoom:
+                    camera.translate(move_vector)
+                    if self._zoom_to_mouse:
+                        # Set the origin of the camera to the new distance, right in front of the new camera position.
+                        self._origin = (r * Vector(0.0, 0.0, -1.0)).preMultiply(camera.getWorldTransformation())
+        else:
+            amount_of_zoom = zoom_range / 1280 / 10.0
+            if self._invert_zoom:
+                amount_of_zoom *= -1
+            new_zoom_factor = camera.getZoomFactor() - amount_of_zoom
 
-        move_vector = -delta * move_vector
-        if delta != 0:
-            if self._min_zoom < r < self._max_zoom:
-                camera.translate(move_vector)
-                if self._zoom_to_mouse:
-                    # Set the origin of the camera to the new distance, right in front of the new camera position.
-                    self._origin = (r * Vector(0.0, 0.0, -1.0)).preMultiply(camera.getWorldTransformation())
-        self._scene.getSceneLock().release()
+            if new_zoom_factor > 1:
+                camera.setZoomFactor(1)
+            elif new_zoom_factor < -0.495:
+                camera.setZoomFactor(-0.495)
+            else:
+                camera.setZoomFactor(new_zoom_factor)
 
-    ##  Rotate the camera in response to a mouse event.
-    #
-    #   \param x Amount by which the camera should be rotated horizontally, expressed in pixelunits
-    #   \param y Amount by which the camera should be rotated vertically, expressed in pixelunits
     def _rotateCamera(self, x: float, y: float) -> None:
+        """Rotate the camera in response to a mouse event.
+
+        :param x: Amount by which the camera should be rotated horizontally, expressed in pixelunits
+        :param y: Amount by which the camera should be rotated vertically, expressed in pixelunits
+        """
+
         camera = self._scene.getActiveCamera()
         if not camera or not camera.isEnabled():
             return
-
-        self._scene.getSceneLock().acquire()
 
         dx = math.radians(x * 180.0)
         dy = math.radians(y * 180.0)
@@ -322,5 +355,3 @@ class CameraTool(Tool):
 
         camera.setPosition(n)
         camera.lookAt(self._origin)
-
-        self._scene.getSceneLock().release()

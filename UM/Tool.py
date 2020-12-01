@@ -15,10 +15,10 @@ from UM.View.SelectionPass import SelectionPass
 
 from typing import cast, List, Optional
 
-##  Abstract base class for tools that manipulate (or otherwise interact with) the scene.
-#
 @signalemitter
 class Tool(PluginObject):
+    """Abstract base class for tools that manipulate (or otherwise interact with) the scene."""
+
     def __init__(self) -> None:
         super().__init__()
         self._controller = UM.Application.Application.getInstance().getController()  # Circular dependency blah
@@ -36,17 +36,19 @@ class Tool(PluginObject):
         Selection.selectionChanged.connect(self._onSelectionChanged)
         self._selected_objects_without_selected_ancestors = None #type: Optional[List[SceneNode]]
 
-        self._shortcut_key = None
+        self._shortcut_key = None  # type: Optional[int]
 
-    ##  Should be emitted whenever a longer running operation is started, like a drag to scale an object.
-    #
-    #   \param tool The tool that started the operation.
     operationStarted = Signal()
+    """Should be emitted whenever a longer running operation is started, like a drag to scale an object.
 
-    ## Should be emitted whenever a longer running operation is stopped.
-    #
-    #   \param tool The tool that stopped the operation.
+    :param tool: The tool that started the operation.
+    """
+
     operationStopped = Signal()
+    """Should be emitted whenever a longer running operation is stopped.
+
+    :param tool: The tool that stopped the operation.
+    """
 
     propertyChanged = Signal()
 
@@ -56,15 +58,17 @@ class Tool(PluginObject):
     def setExposedProperties(self, *args: str):
         self._exposed_properties = list(args)
 
-    def getShortcutKey(self):
+    def getShortcutKey(self) -> Optional[int]:
         return self._shortcut_key
 
-    ##  Handle an event.
-    #   \param event The event to handle.
-    #   \return True if this event has been handled and requires no further
-    #       processing.
-    #   \sa Event
     def event(self, event: Event) -> bool:
+        """Handle an event.
+
+        :param event: The event to handle.
+        :return: True if this event has been handled and requires no further
+            processing.
+        """
+
         if not self._selection_pass:
             self._selection_pass = cast(SelectionPass, UM.Application.Application.getInstance().getRenderer().getRenderPass("selection"))
             if not self._selection_pass:
@@ -73,6 +77,7 @@ class Tool(PluginObject):
         if event.type == Event.ToolActivateEvent:
             if Selection.hasSelection() and self._handle:
                 self._handle.setParent(self.getController().getScene().getRoot())
+                self._handle.setEnabled(True)
 
         if event.type == Event.MouseMoveEvent and self._handle:
             event = cast(MouseEvent, event)
@@ -88,32 +93,33 @@ class Tool(PluginObject):
 
         if event.type == Event.ToolDeactivateEvent and self._handle:
             self._handle.setParent(None)
-
+            self._handle.setEnabled(False)
         return False
 
-    ##  Convenience function
     def getController(self) -> Controller:
+        """Convenience function"""
         return self._controller
 
-    ##  Get the enabled state of the tool
     def getEnabled(self) -> bool:
+        """Get the enabled state of the tool"""
         return self._enabled
 
-    ##  Get the associated handle
-    #   \return \type{ToolHandle}
     def getHandle(self) -> Optional[ToolHandle]:
+        """Get the associated handle"""
         return self._handle
 
-    ##  set the associated handle
-    #   \param \type{ToolHandle}
     def setHandle(self, handle: ToolHandle):
+        """set the associated handle"""
+
         self._handle = handle
 
-    ##  Get which axis is locked, if any.
-    #
-    #   \return The ID of the axis or axes that are locked. See the `ToolHandle`
-    #   class for the associations of IDs to each axis.
     def getLockedAxis(self) -> int:
+        """Get which axis is locked, if any.
+
+        :return: The ID of the axis or axes that are locked. See the `ToolHandle`
+            class for the associations of IDs to each axis.
+        """
+
         return self._locked_axis
 
     def setLockedAxis(self, axis: int) -> None:

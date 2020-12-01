@@ -6,60 +6,79 @@ import unittest.mock
 from unittest.mock import MagicMock, patch
 
 from UM.PackageManager import PackageManager
+from UM.Version import Version
 
 test_package_path = os.path.abspath(os.path.dirname(os.path.abspath(__file__)) + "/UnitTestPackage.package")
 
 
+#@unittest.mock.patch.object(PackageManager, "__init__", lambda *args, **kwargs: None)
+def test_shouldInstallCandidate():
 
-@unittest.mock.patch.object(PackageManager, "__init__", lambda *args, **kwargs: None)
-def test_comparePackageVersions():
+    app_sdk = "2.2.3"
     test_cases = [
-        # same versions
-        {"info_dict1": {"sdk_version": "1",
-                        "package_version": "1.0"},
-         "info_dict2": {"sdk_version": "1",
-                        "package_version": "1.0"},
-         "expected_result": 0},
 
-        # same package versions, different sdk versions
-        {"info_dict1": {"sdk_version": "1",
-                        "package_version": "1.0"},
-         "info_dict2": {"sdk_version": "3",
-                        "package_version": "1.0"},
-         "expected_result": -1},
+        # same sdk version, newer package
+        {"candidate_dict": {"sdk_version": app_sdk,
+                            "package_version": "1.1"},
+         "bundle_dict": {"sdk_version": app_sdk,
+                         "package_version": "1.0"},
+         "expected_result": True},
 
-        # different package versions, same sdk versions
-        {"info_dict1": {"sdk_version": "1",
-                        "package_version": "3.0"},
-         "info_dict2": {"sdk_version": "1",
-                        "package_version": "1.0"},
-         "expected_result": 1},
+        # compatible sdk version, newer package
+        {"candidate_dict": {"sdk_version": "2.1.1",
+                            "package_version": "1.1"},
+         "bundle_dict": {"sdk_version": app_sdk,
+                         "package_version": "1.0"},
+         "expected_result": True},
 
-        # different package versions, different sdk versions  #1
-        {"info_dict1": {"sdk_version": "1",
-                        "package_version": "3.0"},
-         "info_dict2": {"sdk_version": "3",
+        # incompatible sdk version (older)
+        {"candidate_dict": {"sdk_version": "1.0.0",
+                        "package_version": "1.1"},
+         "bundle_dict": {"sdk_version": app_sdk,
                         "package_version": "1.0"},
-         "expected_result": -1},
+         "expected_result": False},
 
-        # different package versions, different sdk versions  #2
-        {"info_dict1": {"sdk_version": "7",
-                        "package_version": "3.0"},
-         "info_dict2": {"sdk_version": "3",
-                        "package_version": "6.0"},
-         "expected_result": -1},
+        # incompatible sdk version (newer, same major)
+        {"candidate_dict": {"sdk_version": "2.4.0",
+                            "package_version": "1.1"},
+         "bundle_dict": {"sdk_version": app_sdk,
+                         "package_version": "1.0"},
+         "expected_result": False},
+
+        # same package versions, same sdk versions
+        {"candidate_dict": {"sdk_version": app_sdk,
+                            "package_version": "1.0"},
+         "bundle_dict": {"sdk_version": app_sdk,
+                         "package_version": "1.0"},
+         "expected_result": False},  # not an upgrade
+
+        # same package versions, compatible sdk versions
+        {"candidate_dict": {"sdk_version": "2.1.0",
+                        "package_version": "1.0"},
+         "bundle_dict": {"sdk_version": "2.2.3",
+                        "package_version": "1.0"},
+         "expected_result": False},  # not an upgrade
+
+        # older package versions, same sdk versions
+        {"candidate_dict": {"sdk_version": app_sdk,
+                        "package_version": "4.1"},
+         "bundle_dict": {"sdk_version": app_sdk,
+                        "package_version": "4.2"},
+         "expected_result": False},
     ]
 
-    package_manager = PackageManager()
+    app = MagicMock()
+    app.getAPIVersion.return_value = Version(app_sdk)
+    package_manager = PackageManager(app)
     for test_case_dict in test_cases:
-        info_dict1 = test_case_dict["info_dict1"]
-        info_dict2 = test_case_dict["info_dict2"]
+        candidate_dict = test_case_dict["candidate_dict"]
+        bundle_dict = test_case_dict["bundle_dict"]
         expected_result = test_case_dict["expected_result"]
 
-        assert expected_result == package_manager._comparePackageVersions(info_dict1, info_dict2)
+        assert expected_result == package_manager._shouldInstallCandidate(candidate_dict, bundle_dict)
 
 
-def test_getLicence():
+def test_getLicense():
     manager = PackageManager(MagicMock())
     assert manager.getPackageLicense(test_package_path) == "Do whatever you want with this.\n"
 
@@ -71,9 +90,10 @@ def test_installAndRemovePackage():
     mock_application.getPluginRegistry = MagicMock(return_value = mock_registry)
     manager = PackageManager(mock_application)
     manager.installedPackagesChanged = MagicMock()
-    manager.installPackage(test_package_path)
+    package_id = manager.installPackage(test_package_path)
     assert manager.installedPackagesChanged.emit.call_count == 1
     assert manager.isPackageInstalled("UnitTestPackage")
+    assert package_id == "UnitTestPackage"
 
     info = manager.getInstalledPackageInfo("UnitTestPackage")
     assert info["author"]["author_id"] == "nallath"
@@ -119,3 +139,87 @@ def test_emptyInit():
 
     assert manager.getPackageContainerIds("packageThatDoesNotExist") == []
 
+
+class TestAddAvailablePackageVersion:
+    def test_addNewVersionThatCanUpdate(self):
+        manager = PackageManager(MagicMock())
+        manager.checkIfPackageCanUpdate = MagicMock(return_value = True)
+        manager.addAvailablePackageVersion("beep", Version("1.0.0"))
+
+        assert manager.packagesWithUpdate == {"beep"}
+
+    def test_addNewVersionThatCantUpdate(self):
+        manager = PackageManager(MagicMock())
+        manager.checkIfPackageCanUpdate = MagicMock(return_value=False)
+        manager.addAvailablePackageVersion("beep", Version("1.0.0"))
+
+        assert manager.packagesWithUpdate == set()
+
+    def test_addMultipleVersions(self):
+        manager = PackageManager(MagicMock())
+        manager.checkIfPackageCanUpdate = MagicMock(return_value=True)
+        manager.addAvailablePackageVersion("beep", Version("1.2.0"))
+        manager.addAvailablePackageVersion("beep", Version("1.0.0"))
+
+        assert manager.packagesWithUpdate == {"beep"}
+
+
+class TestCheckIfPackageCanUpdate:
+    def test_noAvailableVersions(self):
+        manager = PackageManager(MagicMock())
+        assert manager.checkIfPackageCanUpdate("beep") is False
+
+    def test_availableVersionNotInstalledOrBundled(self):
+        manager = PackageManager(MagicMock())
+        manager.addAvailablePackageVersion("beep", Version("1.0.0"))
+
+        # Even though we have a known package version, it's not installed / bundled, so we cant update
+        assert manager.checkIfPackageCanUpdate("beep") is False
+
+    def test_olderVersionIsBundled(self):
+        manager = PackageManager(MagicMock())
+        manager.addAvailablePackageVersion("beep", Version("1.0.0"))
+        manager._bundled_package_dict = {"beep": {"package_info": {"package_version": "0.9.0"}}}
+
+        assert manager.checkIfPackageCanUpdate("beep") is True
+
+    def test_newerVersionIsBundled(self):
+        manager = PackageManager(MagicMock())
+        manager.addAvailablePackageVersion("beep", Version("1.0.0"))
+        manager._bundled_package_dict = {"beep": {"package_info": {"package_version": "1.9.0"}}}
+
+        assert manager.checkIfPackageCanUpdate("beep") is False
+
+    def test_olderVersionIsInstalled(self):
+        manager = PackageManager(MagicMock())
+        manager.addAvailablePackageVersion("beep", Version("1.0.0"))
+        manager._installed_package_dict = {"beep": {"package_info": {"package_version": "0.9.0"}}}
+
+        assert manager.checkIfPackageCanUpdate("beep") is True
+
+    def test_newerVersionIsInstalled(self):
+        manager = PackageManager(MagicMock())
+        manager.addAvailablePackageVersion("beep", Version("1.0.0"))
+        manager._installed_package_dict = {"beep": {"package_info": {"package_version": "1.9.1"}}}
+
+        assert manager.checkIfPackageCanUpdate("beep") is False
+
+
+def test_removeAllScheduledPackages():
+    manager = PackageManager(MagicMock())
+    manager._purgePackage = MagicMock()
+
+    manager._to_remove_package_set = {"beep"}
+    manager._installed_package_dict = {"beep": {}}
+    manager._removeAllScheduledPackages()
+    assert manager._to_remove_package_set == set()
+
+
+def test_removeAllScheduledPackagesWithException():
+    manager = PackageManager(MagicMock())
+    manager._purgePackage = MagicMock(side_effect = Exception)
+    manager._installed_package_dict = {"beep": {}}
+    manager._to_remove_package_set = {"beep"}
+
+    manager._removeAllScheduledPackages()
+    assert manager._to_remove_package_set == {"beep"}

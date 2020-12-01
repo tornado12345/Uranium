@@ -20,14 +20,16 @@ from UM.Settings.SettingDefinition import SettingDefinition
 from UM.Settings.Validator import Validator
 
 
-##  This class provides the value and change notifications for the properties of a single setting
-#
-#   Since setting values and other properties are provided by a stack, we need some way to
-#   query the stack from QML to provide us with those values. This class takes care of that.
-#
-#   This class provides the property values through QObject dynamic properties so that they
-#   are available from QML.
 class SettingPropertyProvider(QObject):
+    """This class provides the value and change notifications for the properties of a single setting
+
+    Since setting values and other properties are provided by a stack, we need some way to
+    query the stack from QML to provide us with those values. This class takes care of that.
+
+    This class provides the property values through QObject dynamic properties so that they
+    are available from QML.
+    """
+
     def __init__(self, parent = None) -> None:
         super().__init__(parent = parent)
 
@@ -43,7 +45,7 @@ class SettingPropertyProvider(QObject):
         self._remove_unused_value = True
         self._validator = None  # type: Optional[Validator]
 
-        self._update_timer = QTimer()
+        self._update_timer = QTimer(self)
         self._update_timer.setInterval(100)
         self._update_timer.setSingleShot(True)
         self._update_timer.timeout.connect(self._update)
@@ -65,11 +67,12 @@ class SettingPropertyProvider(QObject):
             self._stack.containersChanged.connect(self._containersChanged)
 
         self._validator = None
-        self._update()
+        self._updateDelayed()
         self.containerStackChanged.emit()
 
-    ##  Set the containerStackId property.
     def setContainerStackId(self, stack_id: str) -> None:
+        """Set the containerStackId property."""
+
         if stack_id == self.containerStackId:
             return  # No change.
 
@@ -83,12 +86,13 @@ class SettingPropertyProvider(QObject):
         else:
             self.setContainerStack(None)
 
-    ##  Emitted when the containerStackId property changes.
     containerStackIdChanged = pyqtSignal()
+    """Emitted when the containerStackId property changes."""
 
-    ##  The ID of the container stack we should query for property values.
     @pyqtProperty(str, fset = setContainerStackId, notify = containerStackIdChanged)
     def containerStackId(self) -> str:
+        """The ID of the container stack we should query for property values."""
+
         if self._stack:
             return self._stack.id
 
@@ -111,33 +115,39 @@ class SettingPropertyProvider(QObject):
     def removeUnusedValue(self) -> bool:
         return self._remove_unused_value
 
-    ##  Set the watchedProperties property.
     def setWatchedProperties(self, properties: List[str]) -> None:
+        """Set the watchedProperties property."""
+
         if properties != self._watched_properties:
             self._watched_properties = properties
-            self._update()
+            self._updateDelayed()
             self.watchedPropertiesChanged.emit()
 
-    ##  Emitted when the watchedProperties property changes.
     watchedPropertiesChanged = pyqtSignal()
-    ##  A list of property names that should be watched for changes.
+    """Emitted when the watchedProperties property changes."""
+
     @pyqtProperty("QStringList", fset = setWatchedProperties, notify = watchedPropertiesChanged)
     def watchedProperties(self) -> List[str]:
+        """A list of property names that should be watched for changes."""
+
         return self._watched_properties
 
-    ##  Set the key property.
     def setKey(self, key: str) -> None:
+        """Set the key property."""
+
         if key != self._key:
             self._key = key
             self._validator = None
-            self._update()
+            self._updateDelayed()
             self.keyChanged.emit()
 
-    ##  Emitted when the key property changes.
     keyChanged = pyqtSignal()
-    ##  The key of the setting that we should provide property values for.
+    """Emitted when the key property changes."""
+
     @pyqtProperty(str, fset = setKey, notify = keyChanged)
     def key(self):
+        """The key of the setting that we should provide property values for."""
+
         return self._key
 
     propertiesChanged = pyqtSignal()
@@ -161,20 +171,23 @@ class SettingPropertyProvider(QObject):
 
     stackLevelChanged = pyqtSignal()
 
-    ##  At what levels in the stack does the value(s) for this setting occur?
     @pyqtProperty("QVariantList", notify = stackLevelChanged)
     def stackLevels(self):
+        """At what levels in the stack does the value(s) for this setting occur?"""
+
         if not self._stack:
             return [-1]
         return self._stack_levels
 
-    ##  Set the value of a property.
-    #
-    #   \param stack_index At which level in the stack should this property be set?
-    #   \param property_name The name of the property to set.
-    #   \param property_value The value of the property to set.
     @pyqtSlot(str, "QVariant")
     def setPropertyValue(self, property_name, property_value):
+        """Set the value of a property.
+
+        :param stack_index: At which level in the stack should this property be set?
+        :param property_name: The name of the property to set.
+        :param property_value: The value of the property to set.
+        """
+
         if not self._stack or not self._key:
             return
 
@@ -217,13 +230,16 @@ class SettingPropertyProvider(QObject):
 
         container.setProperty(self._key, property_name, property_value)
 
-    ##  Manually request the value of a property.
-    #   The most notable difference with the properties is that you have more control over at what point in the stack
-    #   you want the setting to be retrieved (instead of always taking the top one)
-    #   \param property_name The name of the property to get the value from.
-    #   \param stack_level the index of the container to get the value from.
     @pyqtSlot(str, int, result = "QVariant")
     def getPropertyValue(self, property_name: str, stack_level: int) -> Any:
+        """Manually request the value of a property.
+        The most notable difference with the properties is that you have more control over at what point in the stack
+        you want the setting to be retrieved (instead of always taking the top one)
+
+        :param property_name: The name of the property to get the value from.
+        :param stack_level: the index of the container to get the value from.
+        """
+
         try:
             # Because we continue to count if there are multiple linked stacks, we need to check what stack is targeted
             current_stack = self._stack
@@ -244,6 +260,10 @@ class SettingPropertyProvider(QObject):
             Logger.log("w", "Tried to get property of type %s from %s but it did not exist on requested index %d", property_name, self._key, stack_level)
             return None
         return value
+
+    @pyqtSlot(str, result = str)
+    def getPropertyValueAsString(self, property_name: str) -> str:
+        return self._getPropertyValue(property_name)
 
     @pyqtSlot(int)
     def removeFromContainer(self, index: int) -> None:
@@ -303,7 +323,14 @@ class SettingPropertyProvider(QObject):
         if key != self._key:
             if key in self._relations:
                 self._value_used = None
-                self.isValueUsedChanged.emit()
+                try:
+                    self.isValueUsedChanged.emit()
+                except RuntimeError:
+                    # QtObject has been destroyed, no need to handle the signals anymore.
+                    # This can happen when the QtObject in C++ has been destroyed, but the python object hasn't quite
+                    # caught on yet. Once we call any signals, it will cause a runtimeError since all the underlying
+                    # logic to emit pyqtSignals is gone.
+                    return
             return
 
         has_values_changed = False
@@ -312,12 +339,25 @@ class SettingPropertyProvider(QObject):
                 continue
 
             has_values_changed = True
-
-            self._property_map.insert(property_name, self._getPropertyValue(property_name))
+            try:
+                self._property_map.insert(property_name, self._getPropertyValue(property_name))
+            except RuntimeError:
+                # QtObject has been destroyed, no need to handle the signals anymore.
+                # This can happen when the QtObject in C++ has been destroyed, but the python object hasn't quite
+                # caught on yet. Once we call any signals, it will cause a runtimeError since all the underlying
+                # logic to emit pyqtSignals is gone.
+                return
 
         self._updateStackLevels()
         if has_values_changed:
-            self.propertiesChanged.emit()
+            try:
+                self.propertiesChanged.emit()
+            except RuntimeError:
+                # QtObject has been destroyed, no need to handle the signals anymore.
+                # This can happen when the QtObject in C++ has been destroyed, but the python object hasn't quite
+                # caught on yet. Once we call any signals, it will cause a runtimeError since all the underlying
+                # logic to emit pyqtSignals is gone.
+                return
 
     def _update(self, container = None):
         if not self._stack or not self._watched_properties or not self._key:
@@ -332,22 +372,30 @@ class SettingPropertyProvider(QObject):
         for property_name in self._watched_properties:
             self._property_map.insert(property_name, self._getPropertyValue(property_name))
 
+        # Notify that the properties have been changed.Kewl
+        self.propertiesChanged.emit()
+
         # Force update of value_used
         self._value_used = None
         self.isValueUsedChanged.emit()
 
-    def _updateDelayed(self, container = None):
-        self._update_timer.start()
+    def _updateDelayed(self, container = None) -> None:
+        try:
+            self._update_timer.start()
+        except RuntimeError:
+            # Sometimes the python object is not yet deleted, but the wrapped part is already gone.
+            # In that case there is nothing else to do but ignore this.
+            pass
 
     def _containersChanged(self, container = None):
-        self._updateDelayed(container = container)
+        self._updateDelayed()
 
-    def _storeIndexChanged(self, container = None):
-        self._updateDelayed(container = container)
+    def _storeIndexChanged(self):
+        self._updateDelayed()
 
-    ##  Updates the self._stack_levels field, which indicates at which levels in
-    #   the stack the property is set.
     def _updateStackLevels(self) -> None:
+        """Updates the self._stack_levels field, which indicates at which levels in the stack the property is set."""
+
         levels = []
         # Start looking at the stack this provider is attached to.
         current_stack = self._stack

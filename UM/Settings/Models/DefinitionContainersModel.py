@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Ultimaker B.V.
+# Copyright (c) 2019 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 
 from UM.Qt.ListModel import ListModel
@@ -7,11 +7,14 @@ from PyQt5.QtCore import pyqtProperty, Qt, pyqtSignal
 
 from UM.Settings.ContainerRegistry import ContainerRegistry
 from UM.Settings.DefinitionContainer import DefinitionContainer
+from typing import Dict
 
 
-##  Model that holds definition containers. By setting the filter property the definitions held by this model can be
-#   changed.
 class DefinitionContainersModel(ListModel):
+    """Model that holds definition containers. By setting the filter property the definitions held by this model can be
+    changed.
+    """
+
     NameRole = Qt.UserRole + 1          # Human readable name (string)
     IdRole = Qt.UserRole + 2            # Unique ID of Definition
     SectionRole = Qt.UserRole + 3       # Section of definition / machine. (string)
@@ -27,19 +30,25 @@ class DefinitionContainersModel(ListModel):
         ContainerRegistry.getInstance().containerRemoved.connect(self._onContainerChanged)
 
         self._section_property = ""
-        self._preferred_section_value = ""
+
+        #Preference for which sections should be shown on top. Weights for each section.
+        #Sections with the lowest value are shown on top. Sections not on this
+        #list will get a value of 0.
+        self._preferred_sections = {} #type: Dict[str, int]
 
         self._filter_dict = {}
         self._update()
 
-    ##  Handler for container change events from registry
     def _onContainerChanged(self, container):
+        """Handler for container change events from registry"""
+
         # We only need to update when the changed container is a DefinitionContainer.
         if isinstance(container, DefinitionContainer):
             self._update()
 
-    ##  Private convenience function to reset & repopulate the model.
-    def _update(self):
+    def _update(self) -> None:
+        """Private convenience function to reset & repopulate the model."""
+
         items = []
         definition_containers = ContainerRegistry.getInstance().findDefinitionContainersMetadata(**self._filter_dict)
         definition_containers.sort(key = self._sortKey)
@@ -66,20 +75,23 @@ class DefinitionContainersModel(ListModel):
     def sectionProperty(self):
         return self._section_property
 
-    def setPreferredSectionValue(self, value):
-        if self._preferred_section_value != value:
-            self._preferred_section_value = value
-            self.preferredSectionValueChanged.emit()
+    def setPreferredSections(self, weights: Dict[str, int]):
+        if self._preferred_sections != weights:
+            self._preferred_sections = weights
+            self.preferredSectionsChanged.emit()
             self._update()
 
-    preferredSectionValueChanged = pyqtSignal()
-    @pyqtProperty(str, fset = setPreferredSectionValue, notify = preferredSectionValueChanged)
-    def preferredSectionValue(self):
-        return self._preferred_section_value
+    preferredSectionsChanged = pyqtSignal()
 
-    ##  Set the filter of this model based on a string.
-    #   \param filter_dict Dictionary to do the filtering by.
+    @pyqtProperty("QVariantMap", fset = setPreferredSections, notify = preferredSectionsChanged)
+    def preferredSections(self):
+        return self._preferred_sections
+
     def setFilter(self, filter_dict):
+        """Set the filter of this model based on a string.
+        :param filter_dict: Dictionary to do the filtering by.
+        """
+
         self._filter_dict = filter_dict
         self._update()
 
@@ -93,12 +105,12 @@ class DefinitionContainersModel(ListModel):
 
         if self._section_property:
             section_value = item.get(self._section_property, "")
-            if self._preferred_section_value:
-                result.append(section_value != self._preferred_section_value)
-            result.append(section_value)
+            section_weight = self._preferred_sections.get(section_value, 0)
+            result.append(section_weight)
+            result.append(section_value.lower())
 
-        result.append(int(item.get("weight", 0)))
-        result.append(item["name"])
+        result.append(int(item.get("weight", 0))) #Weight within a section.
+        result.append(item["name"].lower())
 
         return result
 

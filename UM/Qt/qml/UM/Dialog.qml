@@ -1,13 +1,15 @@
 // Copyright (c) 2017 Ultimaker B.V.
 // Uranium is released under the terms of the LGPLv3 or higher.
 
-import QtQuick 2.2
-import QtQuick.Window 2.1
-import QtQuick.Layouts 1.1
+import QtQuick 2.10
+import QtQuick.Window 2.2
+import QtQuick.Layouts 1.3
 
 import UM 1.0 as UM
 
-Window {
+
+Window
+{
     id: base
 
     modality: Qt.ApplicationModal;
@@ -23,8 +25,11 @@ Window {
 
     default property alias contents: contentItem.children;
 
+    property alias loader: contentLoader
+
     property alias leftButtons: leftButtonRow.children;
     property alias rightButtons: rightButtonRow.children;
+    property alias backgroundColor: background.color
 
     signal accepted();
     signal rejected();
@@ -50,6 +55,7 @@ Window {
     }
 
     Rectangle {
+        id: background
         anchors.fill: parent;
         color: palette.window;
 
@@ -75,6 +81,13 @@ Window {
                 topMargin: base.margin;
                 bottom: buttonRow.top;
                 bottomMargin: base.margin;
+            }
+
+            Loader
+            {
+                id: contentLoader
+                anchors.fill: parent
+                property var manager: null
             }
         }
 
